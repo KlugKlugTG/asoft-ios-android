@@ -35,7 +35,9 @@ public class MainActivity extends Activity {
             File f = new File(getExternalFilesDir(null), EngineService.LOG);
             try {
                 if (f.exists()) {
-                    engineLog.setText(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+                    String[] lines = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).split("\n");
+                    int from = Math.max(0, lines.length - 30);
+                    engineLog.setText(String.join("\n", java.util.Arrays.copyOfRange(lines, from, lines.length)));
                 }
             } catch (IOException e) {
                 engineLog.setText(e.toString());
@@ -50,6 +52,43 @@ public class MainActivity extends Activity {
         t.setTextSize(size);
         t.setTextColor(color);
         to.addView(t);
+        return t;
+    }
+
+    /** A rounded group, as iOS's Settings draws one; @top: space above it. */
+    private LinearLayout group(LinearLayout to, int top) {
+        LinearLayout g = new LinearLayout(this);
+        g.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff1c1c1e);
+        bg.setCornerRadius(36);
+        g.setBackground(bg);
+        g.setClipToOutline(true);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = top;
+        to.addView(g, lp);
+        return g;
+    }
+
+    /** A row in a group: a thin line above it unless it is the first. */
+    private TextView row(LinearLayout group, String label, int color, View.OnClickListener l) {
+        if (group.getChildCount() > 0) {
+            View line = new View(this);
+            line.setBackgroundColor(0xff38383a);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 2);
+            lp.leftMargin = 48;
+            group.addView(line, lp);
+        }
+        TextView t = new TextView(this);
+        t.setText(label);
+        t.setTextSize(16);
+        t.setTextColor(color);
+        t.setPadding(48, 40, 48, 40);
+        android.util.TypedValue tv = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        t.setBackgroundResource(tv.resourceId);
+        t.setOnClickListener(l);
+        group.addView(t);
         return t;
     }
 
@@ -95,20 +134,29 @@ public class MainActivity extends Activity {
         Button moreButton = button(box, "More", null);
         moreButton.setBackgroundColor(Color.TRANSPARENT);
         moreButton.setTextColor(0xff0a84ff);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
+        mlp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        mlp.topMargin = 16;
+        moreButton.setLayoutParams(mlp);
         more = new LinearLayout(this);
         more.setOrientation(LinearLayout.VERTICAL);
         more.setVisibility(View.GONE);
         box.addView(more);
-        moreButton.setOnClickListener(v -> more.setVisibility(more.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        moreButton.setOnClickListener(v -> {
+            boolean open = more.getVisibility() != View.VISIBLE;
+            more.setVisibility(open ? View.VISIBLE : View.GONE);
+            moreButton.setText(open ? "Less" : "More");
+        });
 
-        button(more, "Set up iOS 16 (bring it from the PC)", v -> startActivity(new Intent(this, SetupActivity.class)));
-        button(more, "Boot iOS 16 (not from the saved state)", v -> {
+        LinearLayout ios = group(more, 16);
+        row(ios, "Set up iOS 16 again (bring it from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
+        row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> {
             if (!Guest.running()) {
                 GuestService.startCold(this);
             }
             startActivity(new Intent(this, ScreenActivity.class));
         });
-        button(more, "Erase iPhone", v -> new AlertDialog.Builder(this)
+        row(ios, "Erase iPhone", 0xffff453a, v -> new AlertDialog.Builder(this)
                 .setTitle("Erase iPhone?")
                 .setMessage("Settings, installed apps and saves go; iOS starts as new. The iOS you set up stays.")
                 .setPositiveButton("Erase", (d, w) -> {
@@ -121,15 +169,22 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", null)
                 .show());
-        text(more, "Engine test: runs iOS-style code on this phone's CPU the way iOS 16 does here, "
-                + "and reports its speed. Useful when trying another phone.", 13, 0xff8a8a8a).setPadding(0, 32, 0, 8);
-        button(more, "Engine test", v -> {
+        LinearLayout engine = group(more, 40);
+        row(engine, "Engine test", 0xff0a84ff, v -> {
             EngineService.start(this, 2, 2, 120);
             engineLog.setVisibility(View.VISIBLE);
         });
+        TextView about = text(more, "Runs iOS-style code on this phone's CPU the way iOS 16 does here, and reports "
+                + "its speed: useful when trying another phone.", 13, 0xff8a8a8a);
+        about.setPadding(48, 16, 48, 16);
         engineLog = text(more, "", 11, 0xffcfcfcf);
         engineLog.setTypeface(Typeface.MONOSPACE);
         engineLog.setTextIsSelectable(true);
+        engineLog.setPadding(36, 28, 36, 28);
+        GradientDrawable logBg = new GradientDrawable();
+        logBg.setColor(0xff111113);
+        logBg.setCornerRadius(24);
+        engineLog.setBackground(logBg);
         engineLog.setVisibility(new File(getExternalFilesDir(null), EngineService.LOG).exists() ? View.VISIBLE : View.GONE);
         engineLog.post(engineRefresh);
 
