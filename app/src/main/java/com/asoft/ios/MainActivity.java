@@ -38,8 +38,18 @@ public class MainActivity extends Activity {
         root.setFitsSystemWindows(true);
         Button ios = new Button(this);
         ios.setText("Start iOS 16");
-        ios.setOnClickListener(v -> startActivity(new android.content.Intent(this, ScreenActivity.class)));
+        ios.setOnClickListener(v -> {
+            if (Guest.available(this)) {
+                startActivity(new android.content.Intent(this, ScreenActivity.class));
+            } else {
+                startActivity(new android.content.Intent(this, SetupActivity.class));
+            }
+        });
         root.addView(ios);
+        Button setup = new Button(this);
+        setup.setText("Set up iOS 16 (bring it from the PC)");
+        setup.setOnClickListener(v -> startActivity(new android.content.Intent(this, SetupActivity.class)));
+        root.addView(setup);
         Button cold = new Button(this);
         cold.setText("Boot iOS 16 (not from the saved state)");
         cold.setOnClickListener(v -> {
@@ -77,5 +87,8 @@ public class MainActivity extends Activity {
         root.addView(scroll);
         setContentView(root);
         text.post(refresh);
+        if (state == null && !Guest.available(this)) {
+            startActivity(new android.content.Intent(this, SetupActivity.class));   // first start: set up first
+        }
     }
 }

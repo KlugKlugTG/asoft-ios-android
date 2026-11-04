@@ -4,9 +4,12 @@
 export MSYS_NO_PATHCONV=1
 mkdir -p "$OUT"
 
+# TOP: which of the app's screens input may go to (an awk regex on the activity), the iOS screen by default
+TOP=${TOP:-'com[.]asoft[.]ios/[.]ScreenActivity'}
+
 on_top() {
     adb shell "dumpsys activity activities | grep -m1 topResumedActivity; dumpsys window | grep -m1 isKeyguardShowing" 2>/dev/null |
-        tr -d '\r' | awk '/topResumedActivity/ { app = /com\.asoft\.ios\/\.ScreenActivity/ } /isKeyguardShowing=true/ { lock = 1 } END { exit !(app && !lock) }'
+        tr -d '\r' | awk -v top="$TOP" '/topResumedActivity/ { app = $0 ~ top } /isKeyguardShowing=true/ { lock = 1 } END { exit !(app && !lock) }'
 }
 
 wait_top() {

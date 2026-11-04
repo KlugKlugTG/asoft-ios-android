@@ -19,7 +19,7 @@ final class Guest {
     static final long FB_BASE = 0x9c000000L;        // qemu-sweet.py FB_BASE: the guest's ramfb framebuffer
     static final int FB_W = 1080, FB_H = 2400, FB_STRIDE = FB_W * 4;
     static final long STUB_PA = 0x40200000L;
-    static final long KERNEL_PA = 0x100000000L;     // ram.bin's load address for this guest
+    static final long KERNEL_PA = GuestImage.KERNEL_PA;     // ram.bin's load address for this guest
 
     static final long RAM_SIZE = 7L << 30;
     /** The quick-boot state's name inside the user disk (qcow2 internal snapshot). */
@@ -41,13 +41,22 @@ final class Guest {
         return new File(runDir(c), "qmp.sock").getPath();
     }
 
-    /** Where ram.bin, stub.bin and disk.qcow2 are: the app's files, else the shared test folder. */
+    /** The adb test folder (debug builds): ram.bin, stub.bin and disk.qcow2 made on the PC. */
+    static final File TEST_DIR = new File("/data/local/tmp/asoft/ios16-app");
+
+    /** Where payload.bin (or ram.bin and stub.bin) and disk.qcow2 are: what Set up brought in, else the test folder. */
     static File guestDir(Context c) {
-        File own = new File(c.getFilesDir(), "ios16");
-        if (new File(own, "ram.bin").exists()) {
-            return own;
+        if (Installer.installed(c)) {
+            return Installer.dir(c);
         }
-        return new File("/data/local/tmp/asoft/ios16-app");
+        return TEST_DIR;
+    }
+
+    /** Something to start: iOS was set up, or a debug build has the test folder. */
+    static boolean available(Context c) {
+        return Installer.installed(c)
+                || (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && new File(TEST_DIR, "ram.bin").canRead();
     }
 
     /**
@@ -299,6 +308,9 @@ final class Guest {
         ensureUserDisk(c, g);
         resumed = loadTag != null && hasSnapshot(c, loadTag);
         loadedTag = resumed ? loadTag : null;
+        if (!resumed) {
+            Installer.prepareBoot(c, g);    // this phone's time zone, region and clock in the boot-args
+        }
         new File(run, "qmp.sock").delete();
         // the guest keyboard's LEDs, one byte QEMU keeps current (ASOFT_LEDS_FILE): zero until iOS says
         // (written in place, never truncated: the screen reads it while this runs). QEMU's LED state

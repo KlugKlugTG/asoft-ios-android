@@ -22,6 +22,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SetupActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <!-- exported in the debug build only: adb starts it in tests -->
         <activity
             android:name=".ScreenActivity"
