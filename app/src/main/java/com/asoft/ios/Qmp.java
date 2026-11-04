@@ -21,6 +21,9 @@ final class Qmp {
     private final LocalSocket sock = new LocalSocket();
     private OutputStream out;
     private final ExecutorService sender = Executors.newSingleThreadExecutor();
+    /** One per command sent, in order: QEMU answers a client's commands in the order they came. */
+    private final java.util.concurrent.ConcurrentLinkedQueue<java.util.concurrent.CompletableFuture<String>> replies =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     /** Blocks until QEMU greets us, at most @timeoutMs. */
     void connect(String path, int timeoutMs) throws IOException {
@@ -32,14 +35,25 @@ final class Qmp {
             throw new IOException("QEMU closed the QMP socket");
         }
         sock.setSoTimeout(0);
+        replies.add(new java.util.concurrent.CompletableFuture<>());
         write("{\"execute\":\"qmp_capabilities\"}");
         Thread drain = new Thread(() -> {
             try {
-                while (in.readLine() != null) {
-                    // replies and events: nothing to do with them yet
+                String line;
+                while ((line = in.readLine()) != null) {
+                    // events carry "event" and answer nothing; anything else answers the oldest command
+                    if (!line.startsWith("{\"timestamp\"") && !line.contains("\"event\":")) {
+                        java.util.concurrent.CompletableFuture<String> f = replies.poll();
+                        if (f != null) {
+                            f.complete(line);
+                        }
+                    }
                 }
             } catch (IOException ignored) {
                 // QEMU went away
+            }
+            for (java.util.concurrent.CompletableFuture<String> f; (f = replies.poll()) != null; ) {
+                f.complete(null);
             }
         }, "qmp-read");
         drain.setDaemon(true);
@@ -51,15 +65,37 @@ final class Qmp {
         out.flush();
     }
 
-    /** Queues one command; a failure only means QEMU is gone. */
-    void send(String json) {
+    /** Queues one command; its answer, or null once QEMU is gone, completes the future. */
+    java.util.concurrent.CompletableFuture<String> send(String json) {
+        java.util.concurrent.CompletableFuture<String> f = new java.util.concurrent.CompletableFuture<>();
         sender.execute(() -> {
             try {
+                replies.add(f);
                 write(json);
             } catch (IOException ignored) {
-                // QEMU went away
+                replies.remove(f);
+                f.complete(null);       // QEMU went away
             }
         });
+        return f;
+    }
+
+    /**
+     * Runs one command and waits at most @timeoutMs for its answer: the reply line, or null when
+     * QEMU went away or took longer. Never on the UI thread.
+     */
+    String call(String json, long timeoutMs) {
+        try {
+            return send(json).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** An HMP command through QMP (savevm has no plain QMP form that waits). */
+    String hmp(String line, long timeoutMs) {
+        return call("{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\""
+                + line.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}}", timeoutMs);
     }
 
     private static String abs(float x, float y) {
@@ -78,18 +114,24 @@ final class Qmp {
         send("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[" + ev + "]}}");
     }
 
+    /** A command written from the sender thread: its answer is awaited by nobody, but must be counted. */
+    private void writeCmd(String json) throws IOException {
+        replies.add(new java.util.concurrent.CompletableFuture<>());
+        write(json);
+    }
+
     /** A finger from the left edge to 70 % across at mid height: iOS's back gesture. */
     void edgeSwipeBack() {
         sender.execute(() -> {
             try {
-                write("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[" + abs(0.002f, 0.5f)
+                writeCmd("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[" + abs(0.002f, 0.5f)
                         + ",{\"type\":\"btn\",\"data\":{\"down\":true,\"button\":\"left\"}}]}}");
                 for (int i = 1; i <= 12; i++) {
                     Thread.sleep(16);
-                    write("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":["
+                    writeCmd("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":["
                             + abs(0.002f + 0.7f * i / 12, 0.5f) + "]}}");
                 }
-                write("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":["
+                writeCmd("{\"execute\":\"input-send-event\",\"arguments\":{\"events\":["
                         + "{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"left\"}}]}}");
             } catch (IOException | InterruptedException ignored) {
                 // QEMU went away

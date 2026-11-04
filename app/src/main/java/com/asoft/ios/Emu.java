@@ -48,6 +48,31 @@ final class Emu {
         return c.getApplicationInfo().nativeLibraryDir + "/libqemu.so";
     }
 
+    /** qemu-img, packed as libqemuimg.so (pull-libs.sh). */
+    static String imgPath(Context c) {
+        return c.getApplicationInfo().nativeLibraryDir + "/libqemuimg.so";
+    }
+
+    /**
+     * Runs qemu-img with @args and waits for it: [exit code, output]. A short tool, so the JVM's
+     * ProcessBuilder is fine here (it needs no inherited descriptor).
+     */
+    static String[] qemuImg(Context c, String... args) throws IOException {
+        java.util.List<String> cmd = new java.util.ArrayList<>();
+        cmd.add(imgPath(c));
+        cmd.addAll(java.util.Arrays.asList(args));
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+        baseEnv(c, linkLibraries(c), pb.environment());
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            return new String[] { String.valueOf(p.waitFor()), out };
+        } catch (InterruptedException e) {
+            p.destroy();
+            throw new IOException("qemu-img interrupted", e);
+        }
+    }
+
     static File copyAsset(Context c, String name) throws IOException {
         File out = new File(c.getFilesDir(), name);
         try (InputStream in = c.getAssets().open(name); OutputStream o = new FileOutputStream(out)) {

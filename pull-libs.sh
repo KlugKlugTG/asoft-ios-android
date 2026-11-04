@@ -13,6 +13,8 @@ mkdir -p "$OUT" "$ASSETS"
 rm -f "$OUT"/*.so
 pull() { adb exec-out run-as com.termux cat "$1" > "$2"; }
 pull "$QEMU" "$OUT/libqemu.so"
+# qemu-img for the user disk and the quick-boot state; its libraries are a subset of QEMU's
+pull "$(dirname "$QEMU")/qemu-img" "$OUT/libqemuimg.so"
 LIST=$($TSH <<EOF
 python -I - "$QEMU" <<'PY'
 import os, subprocess, sys

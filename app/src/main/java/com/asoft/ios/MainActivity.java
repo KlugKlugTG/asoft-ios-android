@@ -40,6 +40,30 @@ public class MainActivity extends Activity {
         ios.setText("Start iOS 16");
         ios.setOnClickListener(v -> startActivity(new android.content.Intent(this, ScreenActivity.class)));
         root.addView(ios);
+        Button cold = new Button(this);
+        cold.setText("Boot iOS 16 (not from the saved state)");
+        cold.setOnClickListener(v -> {
+            if (!Guest.running()) {
+                GuestService.startCold(this);
+            }
+            startActivity(new android.content.Intent(this, ScreenActivity.class));
+        });
+        root.addView(cold);
+        Button erase = new Button(this);
+        erase.setText("Erase iPhone");
+        erase.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+                .setTitle("Erase iPhone?")
+                .setMessage("Settings, installed apps and the saved state go; iOS starts as new.")
+                .setPositiveButton("Erase", (d, w) -> {
+                    if (Guest.running()) {
+                        android.widget.Toast.makeText(this, "Close iOS first", android.widget.Toast.LENGTH_SHORT).show();
+                    } else {
+                        Guest.erase(this);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show());
+        root.addView(erase);
         Button run = new Button(this);
         run.setText("Engine test");
         run.setOnClickListener(v -> EngineService.start(this, 2, 2, 120));

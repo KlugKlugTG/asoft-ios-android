@@ -22,28 +22,29 @@
             </intent-filter>
         </activity>
 
+        <!-- exported in the debug build only: adb starts it in tests -->
         <activity
             android:name=".ScreenActivity"
-            android:exported="true"
+            android:exported="${testExported}"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
-        <!-- exported only for this test build: driven from adb -->
+        <!-- exported in the debug build only: driven from adb -->
         <service
             android:name=".GuestService"
-            android:exported="true"
+            android:exported="${testExported}"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the emulated iPhone while the user has it open" />
         </service>
 
-        <!-- exported only for this test build: driven from adb -->
+        <!-- exported in the debug build only: driven from adb -->
         <service
             android:name=".EngineService"
-            android:exported="true"
+            android:exported="${testExported}"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
