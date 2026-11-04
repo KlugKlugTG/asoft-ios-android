@@ -7,42 +7,6 @@ OUT=${1:?output directory}
 . "$(dirname "$0")/guarded.sh"
 TOP='com[.]asoft[.]ios/[.](MainActivity|SetupActivity|ScreenActivity)'
 
-ui() { adb shell "uiautomator dump /sdcard/ui-asoft.xml >/dev/null && cat /sdcard/ui-asoft.xml" | tr -d '\r'; }
-# the centre of the node whose text is $1 (exact first, else the first starting with it)
-find_text() {
-    ui | py -3.12 -c "
-import re, sys
-x = sys.stdin.read()
-nodes = [m.groups() for m in re.finditer(r'<node [^>]*?text=\"([^\"]*)\"[^>]*?bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"', x)]
-for t, *b in sorted(nodes, key=lambda n: n[0] != sys.argv[1]):
-    if t.startswith(sys.argv[1]):
-        print((int(b[0]) + int(b[2])) // 2, (int(b[1]) + int(b[3])) // 2)
-        break
-" "$1"
-}
-tap_text() {
-    wait_top
-    local xy
-    xy=$(find_text "$1")
-    [ -n "$xy" ] || { echo "$(date +%T) no \"$1\" on screen"; return 1; }
-    adb shell "input tap $xy"
-}
-qemu_up() { [ "$(adb shell "ps -A -o args | grep -c '[l]ibqemu.so -M'" | tr -d '\r')" -gt 0 ]; }
-# colours in a small copy of a screenshot: the Apple logo on black has few, a lock screen many
-colours() { py -3.12 -c "
-from PIL import Image
-im = Image.open(r'$(cygpath -w "$OUT")/' + '$1.png').convert('RGB').resize((72, 156))
-print(len(im.getcolors(99999)))"; }
-wait_screen() {     # wait_screen NAME MAX_S: until iOS draws more than its boot logo
-    local t0=$(date +%s)
-    while :; do
-        shot "$1"
-        [ -f "$OUT/$1.png" ] && [ "$(colours "$1")" -gt 300 ] && break
-        [ $(($(date +%s) - t0)) -gt "$2" ] && { echo "$(date +%T) $1: nothing after $2 s"; return 1; }
-        sleep 10
-    done
-}
-
 adb shell "am start -n com.asoft.ios/.MainActivity" >/dev/null
 nap 4
 shot r1-first-start

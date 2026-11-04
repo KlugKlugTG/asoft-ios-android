@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     private LinearLayout box;
     private TextView state, saveInfo, engineLog;
     private Button primary;
-    private LinearLayout more;
+    private LinearLayout more, running;
     private final Runnable engineRefresh = new Runnable() {
         @Override
         public void run() {
@@ -148,6 +148,20 @@ public class MainActivity extends Activity {
             moreButton.setText(open ? "Less" : "More");
         });
 
+        running = group(more, 16);
+        row(running, "Turn off iOS (no save)", 0xffff453a, v -> new AlertDialog.Builder(this)
+                .setTitle("Turn off iOS?")
+                .setMessage("iOS shuts down as an iPhone does: settings and apps stay, open apps close. "
+                        + "The next start boots (a few minutes). Named saves stay.")
+                .setPositiveButton("Turn off", (d, w) -> {
+                    if (Guest.running()) {
+                        GuestService.powerOff(this);
+                        state.setText("Turning iOS off…");
+                        state.postDelayed(this::refreshUntilOff, 2000);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show());
         LinearLayout ios = group(more, 16);
         row(ios, "Set up iOS 16 again (bring it from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
         row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> {
@@ -207,9 +221,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void refreshUntilOff() {
+        if (Guest.running() || Guest.saving()) {
+            state.setText("Turning iOS off…");
+            state.postDelayed(this::refreshUntilOff, 2000);
+        } else {
+            refresh();
+        }
+    }
+
     /** What iOS is doing, and the saves (those come from qemu-img or QEMU: off the UI thread). */
     private void refresh() {
         boolean up = Guest.running();
+        running.setVisibility(up ? View.VISIBLE : View.GONE);
         if (!Guest.available(this)) {
             state.setText("iOS 16 is not set up");
             saveInfo.setText("Bring it from your PC: install ASoftware iOS (iOS 16) there, then run Send-ToPhone.cmd.");
@@ -234,9 +258,9 @@ public class MainActivity extends Activity {
             } else if (quick != null) {
                 info = "Goes on from where you closed it (" + quick.date.substring(5, 16) + "), in about 10 s.";
             } else if (Guest.userDisk(this).exists()) {
-                info = "Starts with a boot: about 5 minutes.";
+                info = "Starts with a boot: a few minutes (2 to 4 on our phone).";
             } else {
-                info = "First start: about 5 minutes.";
+                info = "First start: a few minutes (2 to 4 on our phone).";
             }
             if (!up && list.size() > (quick != null ? 1 : 0)) {
                 info += " " + (list.size() - (quick != null ? 1 : 0)) + " named save(s) under 💾.";

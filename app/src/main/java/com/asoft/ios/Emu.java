@@ -66,7 +66,13 @@ final class Emu {
         Process p = pb.start();
         String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         try {
-            return new String[] { String.valueOf(p.waitFor()), out };
+            int code = p.waitFor();
+            if (code != 0) {
+                String t = out.trim();
+                AppLog.note(c, "qemu-img " + String.join(" ", args) + ": exit " + code + ": "
+                        + (t.length() > 300 ? t.substring(t.length() - 300) : t));
+            }
+            return new String[] { String.valueOf(code), out };
         } catch (InterruptedException e) {
             p.destroy();
             throw new IOException("qemu-img interrupted", e);

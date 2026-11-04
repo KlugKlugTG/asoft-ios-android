@@ -12,7 +12,8 @@ Research preview. Tested on one phone so far: Galaxy S25 Ultra (Snapdragon 8 Eli
 - Side bar: Home, side button, 💾 saves. The phone's volume keys are iOS's. Android's back gesture
   is iOS's edge swipe. Turning the phone's screen off locks iOS too.
 - Quick boot: swiping the app away, or Save and close, keeps iOS as it is; it comes back in about
-  10 s instead of a 5 minute boot. Named saves (about 3 GB each) can be taken and loaded.
+  10 s instead of a boot of a few minutes. Named saves (about 3 GB each) can be taken and loaded.
+- Turn off (in 💾, or the notification) shuts iOS down without a save; the next start boots.
 - Settings and apps you add stay on the phone's own copy of the disk.
 
 Not working: App Store and Apple ID, audio, GPU acceleration (iOS 16 draws on the CPU).
@@ -24,7 +25,8 @@ Not working: App Store and Apple ID, audio, GPU acceleration (iOS 16 draws on th
 3. On the PC, run `Send-ToPhone.cmd` from the ASoftware iOS folder. It packs that iOS into
    `ASoftware-iOS16.asoft` (about 6.5 GB) and, with the phone on USB and USB debugging on, sends it
    to the app. Otherwise copy the file to the phone and pick it in the app.
-4. In the app: Set up > Import, then Start iOS 16. The first start takes about 5 minutes.
+4. In the app: Set up > Import, then Start iOS 16. The first start takes a few minutes (2 to 4 on
+   our phone).
 
 The file is made on your PC from what the Windows installer downloaded from Apple. Neither this
 repository nor the app holds any Apple file. Do not share the file.

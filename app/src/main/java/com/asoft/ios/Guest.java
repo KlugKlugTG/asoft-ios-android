@@ -306,8 +306,17 @@ final class Guest {
         File g = guestDir(c);
         File run = runDir(c);
         ensureUserDisk(c, g);
-        resumed = loadTag != null && hasSnapshot(c, loadTag);
+        List<Snap> saves = loadTag == null ? new ArrayList<>() : snapshots(c);
+        resumed = false;
+        StringBuilder tags = new StringBuilder();
+        for (Snap s : saves) {
+            resumed |= s.tag.equals(loadTag);
+            tags.append(tags.length() > 0 ? ", " : "").append(s.tag);
+        }
         loadedTag = resumed ? loadTag : null;
+        AppLog.keepRunLogs(c);
+        AppLog.note(c, "start: wanted " + (loadTag == null ? "a boot" : loadTag) + ", saves [" + tags + "] -> "
+                + (resumed ? "-loadvm " + loadTag : "boot"));
         if (!resumed) {
             Installer.prepareBoot(c, g);    // this phone's time zone, region and clock in the boot-args
         }
@@ -342,7 +351,9 @@ final class Guest {
                 "-global", "virtio-mmio.force-legacy=false",
                 "-name", "ASoftware iOS",
                 "-netdev", "user,id=net0", "-device", "virtio-net-device,netdev=net0",
-                "-drive", "file=" + userDisk(c).getPath() + ",if=none,id=root,cache=writeback,format=qcow2",
+                // cache=none (O_DIRECT): a save writes ~3 GB of RAM into the disk; through the page
+                // cache that filled the phone's memory and lmkd killed the app (QEMU with it) mid-save
+                "-drive", "file=" + userDisk(c).getPath() + ",if=none,id=root,cache=none,format=qcow2",
                 "-device", "virtio-blk-device,drive=root"));
         if (resumed) {
             cmd.add("-loadvm");
@@ -415,7 +426,11 @@ final class Guest {
                     break;
                 }
             }
-            stop();
+            if (Render.alive(p)) {
+                stop();
+            } else {
+                forget();
+            }
             return why != null ? why : "saved in " + saved + " ms";
         } finally {
             saving.set(false);
@@ -444,6 +459,63 @@ final class Guest {
         } finally {
             saving.set(false);
         }
+    }
+
+    /**
+     * Turn off without a save: iOS's own shutdown through QEMU's power key (system_powerdown;
+     * xnu 0100: every process gets SIGTERM, the disks are synced and unmounted, then PSCI
+     * SYSTEM_OFF ends QEMU), as holding an iPhone's side button and sliding does. At most 60 s,
+     * then QEMU is stopped. The quick-boot state goes too: loading it would put the disk back to
+     * that close, so the next start boots from the disk as iOS left it. Not on the UI thread.
+     */
+    static String powerOff(Context c) {
+        if (!saving.compareAndSet(false, true)) {
+            return "busy saving";
+        }
+        try {
+            Qmp q = qmp;
+            int p = pid;
+            if (!Render.alive(p)) {
+                return "iOS is not running";
+            }
+            state = "turning off";
+            long t0 = System.currentTimeMillis();
+            boolean clean = false;
+            if (q != null && q.call("{\"execute\":\"system_powerdown\"}", 10000) != null) {
+                for (int i = 0; i < 600 && Render.alive(p); i++) {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+                clean = !Render.alive(p);
+            }
+            if (clean) {
+                forget();
+            } else {
+                stopAndWait();
+            }
+            dropQuick(c);
+            long ms = System.currentTimeMillis() - t0;
+            return clean ? "turned off in " + ms + " ms" : "iOS did not turn off in 60 s; QEMU stopped after " + ms + " ms";
+        } finally {
+            saving.set(false);
+        }
+    }
+
+    static boolean turningOff() {
+        return "turning off".equals(state);
+    }
+
+    /** QEMU has ended by itself (and was reaped): let go of it without signalling a pid that may be reused. */
+    private static synchronized void forget() {
+        if (qmp != null) {
+            qmp.close();
+            qmp = null;
+        }
+        pid = -1;
+        state = "stopped";
     }
 
     static boolean saving() {

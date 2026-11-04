@@ -40,6 +40,8 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
     private Object backCallback;
     /** ⏏ was pressed: leave once the saved guest has quit. */
     private boolean closing;
+    /** ...and it is a Turn off, not a save. */
+    private boolean closingOff;
     /** "Screen off" over the guest while iOS has its display off; a tap wakes it. */
     private TextView cover;
     private java.io.RandomAccessFile leds;
@@ -247,6 +249,16 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         if (up) {
             b.setPositiveButton("Save now", (d, w) -> askSaveName(list, free));
             b.setNeutralButton("Save and close", (d, w) -> saveAndClose());
+            TextView off = new TextView(this);
+            off.setText("Turn off iOS without saving");
+            off.setTextSize(16);
+            off.setTextColor(0xffff453a);
+            off.setPadding(0, 40, 0, 24);
+            off.setOnClickListener(v -> {
+                dialog[0].dismiss();
+                askTurnOff();
+            });
+            box.addView(off);
         }
         dialog[0] = b.show();
     }
@@ -318,6 +330,23 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                         }, "save-delete").start())
                         .setNegativeButton("Cancel", null)
                         .show())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void askTurnOff() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Turn off iOS?")
+                .setMessage("iOS shuts down as an iPhone does: settings and apps stay, open apps close. "
+                        + "The next start boots (a few minutes) instead of going on from here. Named saves stay.")
+                .setPositiveButton("Turn off", (d, w) -> {
+                    if (!Guest.running() || Guest.saving() || closing) {
+                        return;
+                    }
+                    closing = true;
+                    closingOff = true;
+                    GuestService.powerOff(this);
+                })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
@@ -433,7 +462,8 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                     savingSince = now;
                 }
                 savingShown = s;
-                cover.setText(screenOffText("Saving iOS", s + " s"));
+                boolean off = closingOff || Guest.turningOff();
+                cover.setText(screenOffText(off ? "Turning iOS off" : "Saving iOS", s + " s"));
                 cover.setVisibility(View.VISIBLE);
                 status.setText("");
             }

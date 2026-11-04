@@ -202,7 +202,7 @@ public class SetupActivity extends Activity {
         show();
         status.setText(result);
         if (Installer.installed(this) && result.startsWith("iOS 16 is set up")) {
-            button("Start iOS 16 (the first start takes about 5 minutes)", v -> {
+            button("Start iOS 16 (the first start takes a few minutes)", v -> {
                 startActivity(new Intent(this, ScreenActivity.class));
                 finish();
             });

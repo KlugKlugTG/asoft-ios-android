@@ -34,6 +34,8 @@ public class GuestService extends Service {
                 PendingIntent.FLAG_IMMUTABLE);
         PendingIntent save = PendingIntent.getService(this, 1,
                 new Intent(this, GuestService.class).setAction("save"), PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent off = PendingIntent.getService(this, 2,
+                new Intent(this, GuestService.class).setAction("poweroff"), PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("ASoftware iOS")
@@ -42,6 +44,7 @@ public class GuestService extends Service {
                 .setOngoing(true);
         if (!Guest.saving()) {
             n.addAction(new Notification.Action.Builder(null, "Save and close", save).build());
+            n.addAction(new Notification.Action.Builder(null, "Turn off", off).build());
         }
         startForeground(2, n.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
     }
@@ -55,7 +58,16 @@ public class GuestService extends Service {
             saveThenStop();
             return START_NOT_STICKY;
         }
-        if ("off".equals(action)) {     // power off without saving (adb tests)
+        if ("poweroff".equals(action)) {    // iOS's own shutdown, no save (Turn off)
+            foreground("Turning iOS off");
+            new Thread(() -> {
+                note("power off: " + Guest.powerOff(this));
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelf();
+            }, "guest-poweroff").start();
+            return START_NOT_STICKY;
+        }
+        if ("off".equals(action)) {     // QEMU stopped at once, no save, no shutdown (adb tests)
             foreground("Turning iOS off");
             Guest.stop();
             stopForeground(STOP_FOREGROUND_REMOVE);
@@ -148,11 +160,7 @@ public class GuestService extends Service {
     }
 
     void note(String s) {
-        try (PrintWriter w = new PrintWriter(new FileWriter(new File(Guest.runDir(this), "app.txt"), true))) {
-            w.println(new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date()) + " " + s);
-        } catch (IOException ignored) {
-            // nowhere to say it
-        }
+        AppLog.note(this, s);
     }
 
     static void start(Context c) {
@@ -167,6 +175,11 @@ public class GuestService extends Service {
     /** Replaces the running iOS (what happened since its last save is lost) with the save @tag. */
     static void load(Context c, String tag) {
         c.startForegroundService(new Intent(c, GuestService.class).setAction("load").putExtra("tag", tag));
+    }
+
+    /** iOS's own shutdown, no save; the next start boots. */
+    static void powerOff(Context c) {
+        c.startForegroundService(new Intent(c, GuestService.class).setAction("poweroff"));
     }
 
     static void save(Context c) {
