@@ -11,13 +11,36 @@ android {
         minSdk 29
         targetSdk 35
         versionCode 1
-        versionName '0.1'
+        versionName '0.1.0'
         ndk { abiFilters 'arm64-v8a' }
+    }
+    // The release key stays out of the repository: a properties file (storeFile, storePassword,
+    // keyAlias, keyPassword) at $ASOFT_SIGNING, else ~/.android/asoft-ios-release.properties.
+    // Without it the release APK is unsigned.
+    def signingProps = new Properties()
+    def signingFile = file(System.getenv('ASOFT_SIGNING') ?: "${System.getProperty('user.home')}/.android/asoft-ios-release.properties")
+    if (signingFile.exists()) {
+        signingFile.withInputStream { signingProps.load(it) }
+    }
+    signingConfigs {
+        if (signingProps.storeFile) {
+            release {
+                storeFile file(signingProps.storeFile)
+                storePassword signingProps.storePassword
+                keyAlias signingProps.keyAlias
+                keyPassword signingProps.keyPassword
+            }
+        }
     }
     buildTypes {
         // the test services and the screen take adb's intents in a debug build only
         debug { manifestPlaceholders = [testExported: 'true'] }
-        release { manifestPlaceholders = [testExported: 'false'] }
+        release {
+            manifestPlaceholders = [testExported: 'false']
+            if (signingProps.storeFile) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
     externalNativeBuild {
         cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' }

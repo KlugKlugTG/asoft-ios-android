@@ -84,7 +84,7 @@ public class SetupActivity extends Activity {
         }
         text("Bring it from your PC", 18, Color.WHITE);
         text("1. Install ASoftware iOS (iOS 16) on a Windows PC.\n"
-                + "2. On the PC, run Send-ToPhone.cmd. It packs that iOS into ASoftware-iOS16.asoft (about 6.5 GB).\n"
+                + "2. On the PC, run Send-ToPhone.cmd from the ASoftware iOS folder. It packs that iOS into ASoftware-iOS16.asoft (about 6.5 GB).\n"
                 + "3. With this phone on USB and USB debugging on, it sends the file here by itself. "
                 + "Otherwise copy the file to the phone (for example to Download) and choose it below.",
                 15, 0xffbbbbbb);

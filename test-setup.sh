@@ -29,6 +29,8 @@ applog() { adb shell "run-as com.asoft.ios cat files/run/app.txt" 2>/dev/null | 
 
 adb shell "am start -n com.asoft.ios/.MainActivity" >/dev/null
 nap 3
+tap_text "More" || exit 1
+nap 1
 tap_text "Set up iOS 16" || exit 1
 nap 3
 shot s1-setup
