@@ -1,0 +1,7 @@
+build/
+app/build/
+app/.cxx/
+.gradle/
+local.properties
+# QEMU and its Termux libraries, copied from the phone by pull-libs.sh
+app/src/main/jniLibs/
