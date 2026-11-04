@@ -29,13 +29,13 @@ for c in $(seq 1 "$CYCLES"); do
     applog | grep -aE "resumed in|did not load|start failed" | tail -n 1
     nap 3
     shot "q$c-1-resumed"
-    send tap 1392 1472                  # side bar Home
+    send tap 1393 1380                  # side bar Home
     nap 6
     shot "q$c-2-home"
     guest_tap 74 285                    # Settings
     nap 15
     shot "q$c-3-settings"
-    send tap 1392 1472
+    send tap 1393 1380
     nap 6
     guest_tap 270 1124                  # Safari: the page from before the save
     nap 10
