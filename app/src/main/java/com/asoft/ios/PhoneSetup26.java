@@ -682,6 +682,13 @@ final class PhoneSetup26 {
             TarIo.read(outRaw, r.outBytes, work(c));
         }
         AppLog.note(c, "setup26: job " + j.name + " rc 0 in " + r.seconds + " s" + (r.nat ? " (native)" : " (TCG)"));
+        // the job's console (what its scripts printed: time zone, region, crash lists) stays for later questions
+        File logs = new File(work(c), "phone/logs");
+        logs.mkdirs();
+        File serial = new File(jd, "serial.txt");
+        if (serial.isFile() && !serial.renameTo(new File(logs, j.name + ".txt"))) {
+            AppLog.note(c, "setup26: could not keep " + serial);
+        }
         Installer.deleteTree(jd);
     }
 
