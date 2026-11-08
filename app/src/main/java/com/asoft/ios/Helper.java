@@ -162,10 +162,17 @@ final class Helper {
         for (Map.Entry<String, String> e : env.entrySet()) {
             envp.add(e.getKey() + "=" + e.getValue());
         }
+        // a helper of an app process that died (killed by Android, or the app updated) may still run, on
+        // its own session: it would build into files this run is about to make again
+        File pidFile = new File(dir, "pid");
+        killLeftover(c, pidFile);
         long t0 = System.currentTimeMillis();
         int pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]), new File(dir, "qemu-stderr.txt").getPath());
         if (pid < 0) {
             throw new IOException("cannot start the helper VM");
+        }
+        try (PrintWriter w = new PrintWriter(pidFile)) {
+            w.println(pid);
         }
         AppLog.note(c, "helper " + job + ": QEMU pid " + pid + ", " + cpus + " vCPUs, " + (nat ? "native EL0" : "TCG"));
         Result r = new Result();
@@ -195,9 +202,38 @@ final class Helper {
             Thread.currentThread().interrupt();
             throw new IOException("stopped");
         }
+        pidFile.delete();
         r.seconds = (System.currentTimeMillis() - t0) / 1000;
         AppLog.note(c, "helper " + job + ": rc " + r.rc + " in " + r.seconds + " s" + (r.rc != 0 ? " (" + r.last + ")" : ""));
         return r;
+    }
+
+    /** Ends a helper VM a dead app process left running for job folder @dir (call before its files are made again). */
+    static void endLeftover(Context c, File dir) {
+        killLeftover(c, new File(dir, "pid"));
+    }
+
+    /** Ends the helper QEMU @pidFile names when it is still there (a process of this app, a helper's command line). */
+    private static void killLeftover(Context c, File pidFile) {
+        if (!pidFile.isFile()) {
+            return;
+        }
+        try {
+            int old = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(pidFile.toPath()), StandardCharsets.US_ASCII).trim());
+            byte[] cl = java.nio.file.Files.readAllBytes(new File("/proc/" + old + "/cmdline").toPath());
+            if (new String(cl, StandardCharsets.ISO_8859_1).contains("asoft.job=")) {
+                android.os.Process.killProcess(old);       // SIGKILL; this app's own uid
+                AppLog.note(c, "helper: ended the leftover helper VM " + old + " of an app process before");
+                for (int i = 0; i < 50 && new File("/proc/" + old).exists(); i++) {
+                    Thread.sleep(100);
+                }
+            }
+        } catch (IOException | NumberFormatException e) {
+            // gone already, or not ours
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        pidFile.delete();
     }
 
     /** Reads what the console file has after @at; returns the new end. */

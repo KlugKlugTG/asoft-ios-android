@@ -50,10 +50,12 @@ installer does: no PC, no adb.
   downloaded images, as `Build-iOSDisk.ps1` does on Windows. The disk is packed (6.2 GB) and set up
   like one brought from a PC, then iOS is started once until its lock screen and saved, so your
   first start takes seconds.
-- On a Galaxy S25 Ultra: the disk 32 minutes, packing 2 minutes, iOS's first start 38 minutes, plus
-  the download (55 minutes on a slow evening for Apple's servers; the phone's Wi-Fi allows about
-  18). It needs about 20-26 GB free while it runs and leaves about 10 GB (the disk and iOS's own
-  data with its save). Keep the phone on its charger.
+- On a Galaxy S25 Ultra (measured from the app, 2026-11-08): the download 26 minutes, the disk 21
+  (the helper's Linux programs run on the phone's CPU, as iOS's apps do, so this step is as fast as
+  on our PC), packing 2, iOS's first start 23 (38 in an earlier run): about 75 minutes from Apple's
+  servers to the lock screen. It needs about 24 GB free at its height (with less, the downloaded
+  files go as soon as the disk no longer needs them) and leaves about 10 GB: the disk (6.2 GB) and
+  iOS's own data with its save. Keep the phone on its charger.
 
 Everything it downloads comes from Apple's servers; the app and this repository hold no Apple file.
 
@@ -88,6 +90,10 @@ texture each display frame; input goes over QMP.
 - iOS 26's QEMU (`libqemu26.so`): the same branch with reims-vgpu and metal2vulkan linked in, built
   with the NDK; Turnip and the Vulkan loader beside it. `pull-libs26.sh` puts them in
   `app/src/main/jniLibs26`.
+- The setup from Apple: `pull-setup.sh [ASOFT_IOS_CHECKOUT]` copies the helper VM (`Image.gz`,
+  `initrd.gz`; `Image16k.gz` from `$KERNEL16K`, built with `setup/helper-kernel16k.config`), the
+  iOS 16 kernel, the tools that make `payload.bin` and `asoft-setup.json` (the member and step list
+  the installers share) into `app/src/main/assets`.
 - The app: `./gradlew assembleDebug` (Android Studio's JDK, SDK 36, NDK 29). A release build is
   signed when `~/.android/asoft-ios-release.properties` (or `$ASOFT_SIGNING`) names a key.
 - Tests on a phone over adb: `test-*.sh` (input goes to the phone only while the app is on top
@@ -102,6 +108,13 @@ The app's code: MIT (LICENSE). The APK also carries:
   https://github.com/alpersamur3/reims-vgpu and https://github.com/alpersamur3/metal2vulkan, branch
   `asoft-android`.
 - Mesa's Turnip Vulkan driver (MIT) and the Khronos Vulkan loader (Apache 2.0).
+- For the setup from Apple: our XNU kernel for iOS 16 (Apple Public Source License 2.0; built from
+  Apple's XNU with the patches in [asoft-ios](https://github.com/alpersamur3/asoft-ios) `xnu/`),
+  and the Windows installer's helper VM (`installer/helper` there): Linux 6.12 (GPL v2; kernel.org's
+  6.12.114 with `installer/helper/kernel.config`, and for the phone's engine also
+  `setup/helper-kernel16k.config` here), Ubuntu 24.04 arm64 packages under their own licenses
+  (sources at https://launchpad.net/ubuntu), and apfs-fuse (GPL v2,
+  https://github.com/sgan81/apfs-fuse).
 - Termux packages QEMU links (GLib, GnuTLS, Nettle, libslirp, pixman, zstd and others, under
   their own licenses): sources at https://github.com/termux/termux-packages.
 

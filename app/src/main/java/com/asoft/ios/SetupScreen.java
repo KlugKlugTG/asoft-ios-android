@@ -258,6 +258,8 @@ final class SetupScreen {
             double left = (size - got) / 1e6 / s.mbps;
             details.setText(String.format(Locale.ROOT, "%.1f MB/s · %s left · %d connections%s", s.mbps, minutes(left), s.connections,
                     s.servers.isEmpty() ? "" : " · " + s.servers));
+        } else if (s.waitingForNetwork) {
+            details.setText("No internet connection: it goes on by itself when the phone is online again");
         } else if (s.waitingForWifi) {
             details.setText("Waiting for Wi-Fi (Download on Wi-Fi only is on)");
         } else if (s.paused) {
@@ -268,7 +270,8 @@ final class SetupScreen {
 
         for (String[] st : STEPS) {
             TextView t = stepRows.get(st[0]);
-            boolean isDone = PhoneSetup.done(a, st[0]);
+            // (the download's marker goes when its files are dropped early: a built disk means it was done)
+            boolean isDone = PhoneSetup.done(a, st[0]) || ("ipsw".equals(st[0]) && PhoneSetup.done(a, "disk"));
             boolean now = st[0].equals(s.step) && s.running;
             if (isDone) {
                 t.setText("✓  " + st[1]);
@@ -288,6 +291,8 @@ final class SetupScreen {
         boolean started = PhoneSetup.work(a).isDirectory();
         startPause.setText(s.running ? (s.paused ? "Resume" : "Pause") : all ? "iOS 16 is set up" : started ? "Resume install" : "Install iOS 16");
         startPause.setEnabled(!all);
+        // only the download pauses (a helper VM step or iOS's first start would have to start over)
+        startPause.setVisibility(s.running && !s.paused && !"ipsw".equals(s.step) ? View.GONE : View.VISIBLE);
         cancel.setVisibility(!all && (s.running || started) ? View.VISIBLE : View.GONE);
     }
 

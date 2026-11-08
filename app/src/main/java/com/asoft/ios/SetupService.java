@@ -35,7 +35,7 @@ public class SetupService extends Service {
         volatile int pct = -1;
         volatile String text = "";
         volatile String error;                  // why it stopped, in plain words; null while it runs or when done
-        volatile boolean running, paused, waitingForWifi, finished;
+        volatile boolean running, paused, waitingForWifi, waitingForNetwork, finished;
         volatile List<IpswFetch.Item> items = new ArrayList<>();
         volatile long received;
         volatile int connections;
@@ -49,7 +49,7 @@ public class SetupService extends Service {
     private static volatile Thread worker;
     private PowerManager.WakeLock wakeLock;
     private ConnectivityManager.NetworkCallback netCallback;
-    private volatile boolean unmetered = true;
+    private volatile boolean unmetered = true, online = true;
 
     static boolean wifiOnly(Context c) {
         return c.getSharedPreferences("setup", MODE_PRIVATE).getBoolean("wifi-only", true);
@@ -97,9 +97,11 @@ public class SetupService extends Service {
             } else {
                 n.setProgress(0, 0, true);
             }
-            n.addAction(new Notification.Action.Builder(null, state.paused || pause ? "Resume" : "Pause",
-                    PendingIntent.getService(this, 1, new Intent(this, SetupService.class)
-                            .setAction(state.paused || pause ? "start" : "pause"), PendingIntent.FLAG_IMMUTABLE)).build());
+            if (state.paused || pause || "ipsw".equals(state.step) || state.step.isEmpty()) {     // only the download pauses
+                n.addAction(new Notification.Action.Builder(null, state.paused || pause ? "Resume" : "Pause",
+                        PendingIntent.getService(this, 1, new Intent(this, SetupService.class)
+                                .setAction(state.paused || pause ? "start" : "pause"), PendingIntent.FLAG_IMMUTABLE)).build());
+            }
             n.addAction(new Notification.Action.Builder(null, "Cancel",
                     PendingIntent.getService(this, 2, new Intent(this, SetupService.class).setAction("cancel"),
                             PendingIntent.FLAG_IMMUTABLE)).build());
@@ -118,8 +120,10 @@ public class SetupService extends Service {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         switch (a) {
             case "pause":
-                pause = true;
-                post("Pausing: " + state.text, state.pct);
+                if ("ipsw".equals(state.step) || worker == null) {     // only the download pauses
+                    pause = true;
+                    post("Pausing: " + state.text, state.pct);
+                }
                 break;
             case "cancel":
                 cancel = true;
@@ -151,23 +155,42 @@ public class SetupService extends Service {
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         netCallback = new ConnectivityManager.NetworkCallback() {
             @Override
+            public void onAvailable(Network n) {
+                online = true;
+            }
+
+            @Override
             public void onCapabilitiesChanged(Network n, NetworkCapabilities caps) {
+                online = true;
                 unmetered = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
             }
 
             @Override
             public void onLost(Network n) {
+                online = false;
                 unmetered = false;
             }
         };
         cm.registerDefaultNetworkCallback(netCallback);
-        NetworkCapabilities caps = cm.getNetworkCapabilities(cm.getActiveNetwork());
+        Network active = cm.getActiveNetwork();
+        NetworkCapabilities caps = active == null ? null : cm.getNetworkCapabilities(active);
+        online = caps != null;
         unmetered = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+    }
+
+    /** Still downloading: nothing after the download needs the network. */
+    private boolean downloadLeft() {
+        return !PhoneSetup.done(this, "ipsw") && !PhoneSetup.done(this, "disk");
     }
 
     /** The download waits for Wi-Fi (or any unmetered network) when the user asked for it. */
     private boolean noWifi() {
-        return wifiOnly(this) && !unmetered && !PhoneSetup.done(this, "ipsw") && !PhoneSetup.done(this, "disk");
+        return wifiOnly(this) && online && !unmetered && downloadLeft();
+    }
+
+    /** No network at all: the download waits for one and goes on by itself (a lost signal, flight mode). */
+    private boolean noNetwork() {
+        return !online && downloadLeft();
     }
 
     private void begin() {
@@ -194,13 +217,15 @@ public class SetupService extends Service {
             try {
                 while (!cancel) {
                     // paused, or waiting for Wi-Fi: what is done stays done, the run goes on from it
-                    while (!cancel && (pause || noWifi())) {
+                    while (!cancel && (pause || noWifi() || noNetwork())) {
                         state.paused = true;
                         state.waitingForWifi = !pause && noWifi();
+                        state.waitingForNetwork = !pause && noNetwork();
                         Thread.sleep(1000);
                     }
                     state.paused = false;
                     state.waitingForWifi = false;
+                    state.waitingForNetwork = false;
                     if (cancel) {
                         break;
                     }
@@ -222,7 +247,7 @@ public class SetupService extends Service {
                         if (cancel) {
                             break;
                         }
-                        if (pause || noWifi()) {
+                        if (pause || noWifi() || noNetwork()) {
                             continue;       // the loop above waits; the next run goes on where this one stopped
                         }
                         state.error = plain(e);
@@ -267,7 +292,7 @@ public class SetupService extends Service {
             return true;
         }
         boolean downloading = "ipsw".equals(state.step);
-        return downloading && (pause || noWifi());
+        return downloading && (pause || noWifi() || noNetwork());
     }
 
     private PhoneSetup.Progress progress() {
@@ -292,7 +317,7 @@ public class SetupService extends Service {
                 long now = System.currentTimeMillis();
                 if (now - lastPost > 2000) {
                     lastPost = now;
-                    post((pause ? "Pausing after this step: " : "") + text + (pct >= 0 ? " (" + pct + "%)" : ""), pct);
+                    post(text + (pct >= 0 ? " (" + pct + "%)" : ""), pct);
                 }
             }
 
@@ -320,8 +345,17 @@ public class SetupService extends Service {
                         String.format(Locale.ROOT, "Downloading from Apple: %.1f of %.1f GB", done / 1e9, total / 1e9));
             }
 
+            int logged;
+
             @Override
             public void log(String line) {
+                // the lines that say how a run went into the app's log too: where a download resumed, which
+                // servers answered; retries only a few (a slow evening makes hundreds)
+                boolean keep = line.contains("chunks to fetch") || line.startsWith("CDN servers") || line.startsWith("IPSW dropped")
+                        || (line.contains("retry") && logged++ < 20);
+                if (keep) {
+                    AppLog.note(SetupService.this, "setup: " + line);
+                }
                 synchronized (state.log) {
                     state.log.add(line);
                     if (state.log.size() > 200) {

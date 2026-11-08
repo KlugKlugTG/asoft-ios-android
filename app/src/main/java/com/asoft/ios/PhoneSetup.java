@@ -195,14 +195,19 @@ final class PhoneSetup {
         File serial = new File(Guest.runDir(c), "serial.txt");
         long t0 = System.currentTimeMillis();
         serial.delete();
-        GuestService.startCold(c);
+        // A boot, in this foreground service's own process: GuestService (another foreground service)
+        // may not be started from the background on Android 12 and later, and the screen may be off by now.
+        // Guest.start is what GuestService runs for a boot; the screen attaches to it if the user opens iOS.
+        Guest.select(c, Guest.IOS16);
+        Guest.startError = null;
+        Guest.start(c, null);
         boolean offSeen = false, up = false;
         long at = 0;
         StringBuilder carry = new StringBuilder();
         try {
             while (!up) {
                 if (cancelled.getAsBoolean()) {
-                    GuestService.save(c);           // what it did so far stays in a save: the next try goes on from it
+                    end(c);                         // what it did so far stays in a save
                     throw new IOException("stopped");
                 }
                 long s = (System.currentTimeMillis() - t0) / 1000;
@@ -238,18 +243,29 @@ final class PhoneSetup {
             }
             p.step("firststart", 97, "iOS is up; saving it");
             Thread.sleep(60_000);                   // let it settle, as the PC installer does
-            GuestService.save(c);
-            for (int i = 0; i < 180 && Guest.running(); i++) {
-                Thread.sleep(1000);
-            }
+            String saved = end(c);
             if (Guest.running()) {
-                throw new IOException("iOS did not close after its first start");
+                throw new IOException("iOS did not close after its first start (" + saved + ")");
             }
-            AppLog.note(c, "setup: first start done in " + (System.currentTimeMillis() - t0) / 1000 + " s");
+            AppLog.note(c, "setup: first start done in " + (System.currentTimeMillis() - t0) / 1000 + " s, " + saved);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            end(c);
             throw new IOException("stopped");
         }
+    }
+
+    /**
+     * Saves iOS into its quick-boot slot and ends it (Save and close's own path; it waits for QEMU to
+     * end), then lets go of the guest RAM memfd: the app keeps it after iOS 16 ends, and after a first
+     * start it holds gigabytes of pages nobody needs until the user starts iOS.
+     */
+    private static String end(Context c) {
+        String r = Guest.running() ? Guest.saveAndQuit(c) : "not running";
+        if (!Guest.running()) {
+            Render.closeGuestRam();
+        }
+        return r;
     }
 
     // -- ipsw -----------------------------------------------------------------------------------
@@ -342,6 +358,7 @@ final class PhoneSetup {
             throws IOException {
         p.step("payload", 0, "The kernel and this iPhone's device tree");
         File jd = new File(work(c), "payload-job");
+        Helper.endLeftover(c, jd);
         Installer.deleteTree(jd);
         jd.mkdirs();
         Map<String, Object> files = new LinkedHashMap<>();
@@ -397,6 +414,7 @@ final class PhoneSetup {
     private static void disk(Context c, File ipsw, File root, File scratch, int cpus, Progress p, BooleanSupplier cancelled)
             throws IOException {
         p.step("disk", 0, "Building the iOS disk");
+        Helper.endLeftover(c, new File(work(c), "disk-job"));
         root.delete();
         scratch.delete();
         for (String[] a : new String[][] {{root.getPath(), "16G"}, {scratch.getPath(), "10G"}}) {

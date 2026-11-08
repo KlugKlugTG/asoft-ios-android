@@ -248,7 +248,7 @@ public class MainActivity extends Activity {
                 .show());
         LinearLayout ios = group(more, 16);
         freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
-        row(ios, "Set up iOS 16 again (bring it from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
+        row(ios, "Set up iOS 16 again (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
         row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
                 Guest.select(this, Guest.IOS16);
@@ -385,7 +385,7 @@ public class MainActivity extends Activity {
     }
 
     private void primaryAction() {
-        if (!Guest.available(this)) {
+        if (!Guest.available(this) || SetupService.busy()) {
             startActivity(new Intent(this, SetupActivity.class));
         } else {
             open(Guest.IOS16);
@@ -582,13 +582,14 @@ public class MainActivity extends Activity {
         boolean up = Guest.running() && Guest.os(this) == Guest.IOS16;
         showFreeRam();
         showPowerWarning();
+        // the setup from Apple runs (its last step starts iOS once, in the background): the card follows it
+        if (SetupService.busy()) {
+            state.setText("Installing iOS 16");
+            saveInfo.setText(SetupService.state.text);
+            primary.setText("Show the install");
+            return;
+        }
         if (!Guest.available(this)) {
-            if (SetupService.busy()) {
-                state.setText("Installing iOS 16");
-                saveInfo.setText(SetupService.state.text);
-                primary.setText("Show the install");
-                return;
-            }
             state.setText("iOS 16 is not set up");
             saveInfo.setText("Set up installs it on this phone from Apple's servers (about two hours, no PC), or brings it from "
                     + "your PC (Send-ToPhone.cmd).");
