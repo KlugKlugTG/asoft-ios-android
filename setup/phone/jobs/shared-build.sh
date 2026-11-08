@@ -6,7 +6,7 @@ step ramdisk
 progress 55 "the device trees"
 export QEMU_SPTM=$A/tools/qemu-sptm
 python3 -I $S/dt-root26smp.py fw/dtree.orig dtree-smp4 --cpus 4
-python3 -I phone/dt-phone.py dtree-smp4 dtree-phone --timebase 19200000
+python3 -I $S/dt-phone.py dtree-smp4 dtree-phone --timebase 19200000
 python3 -I $S/dt-aod.py dtree-phone dtree-phone-aod
 progress 65 "the kernel with OpenGL ES's keys"
 python3 -I $S/kc-gles.py cloud/kernelcache.research.vphone600.decompressed fw/bootkc

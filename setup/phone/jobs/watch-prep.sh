@@ -7,6 +7,6 @@ python3 -I $S/kc-watch.py watchos/bootkc-w cloud/kernelcache.research.vphone600.
 progress 40 "the watch's device tree"
 export QEMU_SPTM=$A/tools/qemu-sptm
 python3 -I $S/dt-watch.py dtree-smp4 watchos/ipsw/DeviceTree.n207sap.raw watchos/dtree-w
-python3 -I phone/dt-phone.py watchos/dtree-w watchos/dtree-w-3g-19m2 --ram-gib 3 --timebase 19200000
+python3 -I $S/dt-phone.py watchos/dtree-w watchos/dtree-w-3g-19m2 --ram-gib 3 --timebase 19200000
 progress 60 "the GPU driver for watchOS"
 step gpu

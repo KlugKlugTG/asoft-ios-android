@@ -623,7 +623,7 @@ final class PhoneSetup26 {
         if (watch) {
             assetDir(c, "setup/scripts/watchos", s, null, files);
         }
-        for (String n : new String[] {"dt-phone.py", "locale.py"}) {
+        for (String n : new String[] {"locale.py"}) {
             files.put("phone/" + n, asset(c, "setup/phone/" + n));
         }
         for (Map.Entry<String, Object> e : j.in.entrySet()) {

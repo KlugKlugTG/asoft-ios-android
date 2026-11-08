@@ -248,7 +248,7 @@ public class MainActivity extends Activity {
                 .show());
         LinearLayout ios = group(more, 16);
         freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
-        row(ios, "Set up iOS 16 again (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
+        row(ios, "Set up: iOS 16, iOS 26 and watchOS (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
         row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
                 Guest.select(this, Guest.IOS16);
@@ -395,6 +395,8 @@ public class MainActivity extends Activity {
     private void primary26Action() {
         if (Guest.available26(this)) {
             open(Guest.IOS26);
+        } else {
+            startActivity(new Intent(this, SetupActivity.class));     // iOS 26 from Apple (Setup26Screen)
         }
     }
 
@@ -448,7 +450,8 @@ public class MainActivity extends Activity {
     private void refresh26() {
         boolean debug = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         String missing = Guest.missing26(this);
-        card26.setVisibility(missing == null || debug ? View.VISIBLE : View.GONE);
+        // (shown without its files too: its button leads to Set up, which installs it from Apple)
+        card26.setVisibility(View.VISIBLE);
         boolean twoX = Guest.scale26(this) == 2;
         if (scale26Row != null) {
             scale26Row.setText("iOS 26's screen: " + (twoX ? "2x (faster)" : "3x (sharp)"));
@@ -456,9 +459,13 @@ public class MainActivity extends Activity {
         }
         boolean up = Guest.running() && Guest.os(this) == Guest.IOS26;
         if (missing != null) {
-            state26.setText("iOS 26 is not on this phone");
-            info26.setText("No " + new File(Guest.dir26(this), missing) + " (or this app cannot read it).");
-            primary26.setVisibility(View.GONE);
+            boolean busy = SetupService.busy() && "a26".equals(SetupService.state.target);
+            state26.setText(busy ? "iOS 26 / watchOS are being set up" : "iOS 26 is not on this phone");
+            info26.setText(busy ? SetupService.state.text
+                    : "Set up downloads it from Apple (about 10 GB) and builds it on this phone, after a check of its GPU."
+                    + (debug ? " (No " + new File(Guest.dir26(this), missing) + ".)" : ""));
+            primary26.setText(busy ? "Open Set up" : "Set up iOS 26 or watchOS");
+            primary26.setVisibility(View.VISIBLE);
             return;
         }
         primary26.setVisibility(View.VISIBLE);

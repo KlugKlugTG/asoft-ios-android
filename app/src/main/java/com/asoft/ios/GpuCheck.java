@@ -46,12 +46,12 @@ final class GpuCheck {
     }
 
     /**
-     * Debug builds: a check without Turnip (adb: GpuCheckService is not needed for it, the setup screen's
-     * check reads the "no-turnip" setting), to see the unsupported-GPU screen and its log on a phone that passes.
+     * Debug builds: a check without Turnip, to see the unsupported-GPU screen and its log on a phone that passes
+     * (adb: run-as PACKAGE touch files/gpucheck-no-turnip, then Check again; rm it to go back).
      */
     static boolean turnipOff(Context c) {
         return (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                && c.getSharedPreferences("setup", Context.MODE_PRIVATE).getBoolean("gpucheck-no-turnip", false);
+                && new File(c.getFilesDir(), "gpucheck-no-turnip").exists();
     }
 
     /** The check passed for this build: iOS 26 and watchOS may be downloaded. */
@@ -81,7 +81,7 @@ final class GpuCheck {
             String turnipEnd;
             if (turnipOff(c)) {
                 turnipEnd = "skipped (Turnip turned off for a test)";
-                write(new File(d, "turnip.log"), "error: Turnip is turned off for a test (debug setting gpucheck-no-turnip)\nresult: fail\n");
+                write(new File(d, "turnip.log"), "error: Turnip is turned off for a test (debug flag files/gpucheck-no-turnip)\nresult: fail\n");
             } else if (!adreno()) {
                 turnipEnd = "skipped (no Adreno GPU: Turnip drives Adreno GPUs only)";
                 write(new File(d, "turnip.log"), "error: no /dev/kgsl-3d0: this phone has no Adreno GPU, which the app's Turnip driver needs\nresult: fail\n");
