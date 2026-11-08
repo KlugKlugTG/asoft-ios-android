@@ -1221,7 +1221,8 @@ final class PhoneSetup26 {
                     lastLogged = min;
                     AppLog.note(c, "setup26: watch first boot " + min + " min, the screen has " + variety + " colours");
                 }
-                if (ark && variety > 40) {
+                // the Apple logo samples to 8 colours, the face to ~30 (2026-11-08, Modular face at 11 min)
+                if (ark && variety > 20) {
                     AppLog.note(c, "setup26: the watch face after " + (System.currentTimeMillis() - t0) / 1000 + " s (" + variety + " colours)");
                     break;
                 }
