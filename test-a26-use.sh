@@ -15,8 +15,15 @@ applog() { adb shell "run-as $PKG cat $LOG" | tr -d '\r'; }
 qemus() { adb shell "ps -A -o args | grep -c '[l]ibqemu26'" | tr -d '\r'; }
 mean() { python -I -c "
 from PIL import Image, ImageStat; im=Image.open(r'$(cygpath -w "$OUT/$1.png")').convert('L').crop((150,500,1300,2600)); print(round(ImageStat.Stat(im).mean[0]))"; }
-cols() { python -I -c "
-from PIL import Image; im=Image.open(r'$(cygpath -w "$OUT/$1.png")').convert('RGB').resize((72,156)); print(len(im.getcolors(99999)))"; }
+cols() {    # iOS 26: colours on the whole screen; watch: saturated colours inside the watch's screen only (the drawn
+            # case and band have plenty of colours of their own; the logo has 0 saturated ones, the face ~250)
+    if [ "$OS" = watch ]; then python -I -c "
+from PIL import Image; im=Image.open(r'$(cygpath -w "$OUT/$1.png")').convert('RGB').crop((130,920,1180,2210)).resize((96,118))
+print(sum(1 for c,(r,g,b) in im.getcolors(99999) if max(r,g,b)-min(r,g,b)>40))"
+    else python -I -c "
+from PIL import Image; im=Image.open(r'$(cygpath -w "$OUT/$1.png")').convert('RGB').resize((72,156)); print(len(im.getcolors(99999)))"
+    fi; }
+UPMIN=120; [ "$OS" = watch ] && UPMIN=20
 name=$([ "$OS" = watch ] && echo watchOS || echo "iOS 26")
 
 start() {   # start TAG: from the home screen, until the guest draws more than its logo (or 25 min)
@@ -32,7 +39,7 @@ start() {   # start TAG: from the home screen, until the guest draws more than i
     applog | tail -n +$((n0 + 1)) | grep -E "start $name|start watchOS|start iOS 26|resumed in|boot|not load|did not|device tree"
     while :; do
         sleep 15; shot "$1"
-        [ -f "$OUT/$1.png" ] && [ "$(cols "$1")" -gt 120 ] && break
+        [ -f "$OUT/$1.png" ] && [ "$(cols "$1")" -gt $UPMIN ] && break
         [ "$(qemus)" -gt 0 ] || { echo "$(date +%T) QEMU ended"; applog | tail -n 5; exit 2; }
         [ $(($(date +%s) - t0)) -lt 1500 ] || { echo "$(date +%T) $1: only the logo after 25 min"; exit 1; }
     done
