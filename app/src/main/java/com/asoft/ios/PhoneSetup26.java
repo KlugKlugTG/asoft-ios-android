@@ -1015,7 +1015,8 @@ final class PhoneSetup26 {
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         try {
-            while (framesShown(c) < 5) {
+            // the PC's Wait-Ui: "frame N shown" with N >= 5 (or the screen past the logo: the watch's reims logged two)
+            while (framesShown(c) < 5 && Guest.frameVariety() <= 20) {
                 if (cancelled.getAsBoolean()) {
                     throw new IOException("stopped");
                 }
