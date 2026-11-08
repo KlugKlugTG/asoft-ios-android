@@ -1618,6 +1618,8 @@ final class Guest {
         }
         pid = -1;
         state = "stopped";
+        // iOS 16's RAM is this app's memfd: its pages go back to the phone now (Render.releaseGuestRam)
+        Render.releaseGuestRam();
     }
 
     static boolean saving() {
@@ -1643,7 +1645,11 @@ final class Guest {
                 break;
             }
         }
+        boolean ended = !Render.alive(p);
         stop();
+        if (ended) {
+            Render.releaseGuestRam();       // as forget(): QEMU is gone, its RAM's pages need not stay
+        }
     }
 
     /**

@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <linux/falloc.h>
 
 #define TAG "asoft-render"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -50,6 +51,7 @@ static uint64_t frames_drawn, frames_uploaded;
  * memory-backend-file,mem-path=/proc/self/fd/<n>.  The framebuffer is mapped from our own fd.
  */
 static int ram_fd = -1;
+static off_t ram_size;
 
 JNIEXPORT jint JNICALL
 Java_com_asoft_ios_Render_createGuestRam(JNIEnv *env, jclass cls, jlong size)
@@ -62,7 +64,28 @@ Java_com_asoft_ios_Render_createGuestRam(JNIEnv *env, jclass cls, jlong size)
         LOGE("guest RAM memfd: %s", strerror(errno));
         return -1;
     }
+    ram_size = size;
     return ram_fd;
+}
+
+/*
+ * QEMU has ended: the guest's pages go back to the phone now, not at the next start. This app holds
+ * the memfd, so after iOS 16's Save and close they stayed allocated (3.4 GB of Shmem measured on
+ * 2026-11-08), and lmkd killed the app, its foreground setup included, at the next squeeze. A hole
+ * punched over the whole file frees them and keeps its size: a framebuffer still mapped reads zeros
+ * (a truncate would make it fault).
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_asoft_ios_Render_releaseGuestRam(JNIEnv *env, jclass cls)
+{
+    if (ram_fd < 0 || ram_size <= 0) {
+        return JNI_FALSE;
+    }
+    if (fallocate(ram_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, ram_size) < 0) {
+        LOGE("guest RAM release: %s", strerror(errno));
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
 }
 
 /* No guest RAM of ours any more (iOS 26 keeps its own): the pages go back to the phone. */

@@ -16,6 +16,9 @@ final class Render {
     /** Lets go of the guest RAM memfd (its pages go back to the phone). */
     static native void closeGuestRam();
 
+    /** Gives the guest RAM memfd's pages back once QEMU has ended (the fd stays, at its size); false if none. */
+    static native boolean releaseGuestRam();
+
     /** A memfd of @size for iOS 26's frames (QEMU's ASOFT_FRAME_FD), inherited by the next spawn(); its fd, or -1. */
     static native int createFrameMemory(long size);
 
