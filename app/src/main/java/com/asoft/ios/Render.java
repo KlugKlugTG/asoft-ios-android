@@ -13,6 +13,12 @@ final class Render {
     /** A memfd of @size for the guest's RAM, inherited by the next spawn(); its fd number, or -1. */
     static native int createGuestRam(long size);
 
+    /** Lets go of the guest RAM memfd (its pages go back to the phone). */
+    static native void closeGuestRam();
+
+    /** A memfd of @size for iOS 26's frames (QEMU's ASOFT_FRAME_FD), inherited by the next spawn(); its fd, or -1. */
+    static native int createFrameMemory(long size);
+
     /** Starts @argv with @envp (K=V), output to @log, keeping the guest RAM fd; the pid, or -1. */
     static native int spawn(String[] argv, String[] envp, String log);
 
@@ -20,7 +26,10 @@ final class Render {
 
     static native void terminate(int pid);
 
-    /** Maps the framebuffer of QEMU process @pid; null when done, else what went wrong. */
+    /** SIGKILL, for a QEMU that does not end on terminate() (iOS 26's). */
+    static native void forceKill(int pid);
+
+    /** Maps the framebuffer of QEMU process @pid (@offset in its RAM; -1: the frame memfd); null when done, else what went wrong. */
     static native String openFramebuffer(int pid, long offset, int width, int height, int stride);
 
     /** Binds GLES to @s; call on the render thread, like every call below. */

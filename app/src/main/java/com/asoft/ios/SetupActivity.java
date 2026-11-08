@@ -36,6 +36,7 @@ public class SetupActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        DevNight.apply(this);
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.BLACK);
         scroll.setFitsSystemWindows(true);
@@ -140,7 +141,7 @@ public class SetupActivity extends Activity {
             return;
         }
         if (Guest.running()) {
-            status.setText("Close iOS first (💾 > Save and close).");
+            status.setText("Close iOS first (side bar > Saves > Save and close).");
             return;
         }
         if (Installer.hasData(this)) {

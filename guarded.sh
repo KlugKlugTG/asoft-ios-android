@@ -4,12 +4,17 @@
 export MSYS_NO_PATHCONV=1
 mkdir -p "$OUT"
 
+# HOME_XY: the side bar's Home on the S25 (1440x3120): "1346 1310" with the bar open at its default height
+# (2026-11-06 evening). The bar's handle toggles its buttons and its height is kept in the pref "bar-y"; the side button
+# is at about "1346 1476"; the earlier "1380 1200" now hits the handle. The test scripts tap ${HOME_XY:-1346 1310}.
+
 # TOP: which of the app's screens input may go to (an awk regex on the activity), the iOS screen by default
 TOP=${TOP:-'com[.]asoft[.]ios/[.]ScreenActivity'}
 
 on_top() {
-    adb shell "dumpsys activity activities | grep -m1 topResumedActivity; dumpsys window | grep -m1 isKeyguardShowing" 2>/dev/null |
-        tr -d '\r' | awk -v top="$TOP" '/topResumedActivity/ { app = $0 ~ top } /isKeyguardShowing=true/ { lock = 1 } END { exit !(app && !lock) }'
+    # topResumedActivity= on Android 13 and later, mResumedActivity: on 12
+    adb shell "dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity'; dumpsys window | grep -m1 isKeyguardShowing" 2>/dev/null |
+        tr -d '\r' | awk -v top="$TOP" '/topResumedActivity|mResumedActivity/ { app = $0 ~ top } /isKeyguardShowing=true/ { lock = 1 } END { exit !(app && !lock) }'
 }
 
 wait_top() {

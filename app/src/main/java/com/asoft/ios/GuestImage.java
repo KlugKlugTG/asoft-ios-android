@@ -77,6 +77,17 @@ final class GuestImage {
         return sb.append(" asoft_clock=").append(clock24 ? "24" : "12").toString();
     }
 
+    /** The boot-args with XNU's CPU count (cpus=N) for a QEMU with -smp N. */
+    static String withCpus(String cmdline, int n) {
+        StringBuilder sb = new StringBuilder();
+        for (String w : cmdline.trim().split("\\s+")) {
+            if (!w.startsWith("cpus=")) {
+                sb.append(sb.length() > 0 ? " " : "").append(w);
+            }
+        }
+        return sb.append(" cpus=").append(n).toString();
+    }
+
     static int indexOf(byte[] p, byte[] s, int from, int to) {
         outer:
         for (int i = Math.max(0, from); i <= Math.min(p.length, to) - s.length; i++) {

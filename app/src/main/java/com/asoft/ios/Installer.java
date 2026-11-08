@@ -51,23 +51,24 @@ final class Installer {
     }
 
     /**
-     * The phone's boot-args: the bundle's, with this phone's time zone, region and clock. Done at
-     * every boot (not for a loaded save: its RAM is already set up), so a changed setting counts.
+     * The phone's boot-args: the bundle's, with this phone's time zone, region and clock, and
+     * @cpus (QEMU's -smp, CpuPlan). Done at every boot (not for a loaded save: its RAM is already
+     * set up), so a changed setting counts.
      */
-    static void prepareBoot(Context c, File dir) throws IOException {
+    static void prepareBoot(Context c, File dir, int cpus) throws IOException {
         File payload = new File(dir, "payload.bin");
         if (!payload.isFile() || !dir.canWrite()) {
             return;                     // a test folder with a ready ram.bin
         }
         String base = GuestImage.cmdline(Files.readAllBytes(payload.toPath()));
         String region = java.util.Locale.getDefault().getCountry();
-        GuestImage.write(payload, GuestImage.withLocale(base, java.util.TimeZone.getDefault().getID(), region,
-                android.text.format.DateFormat.is24HourFormat(c)), dir);
+        GuestImage.write(payload, GuestImage.withCpus(GuestImage.withLocale(base, java.util.TimeZone.getDefault().getID(),
+                region, android.text.format.DateFormat.is24HourFormat(c)), cpus), dir);
     }
 
-    /** Something an import would delete: an installed iOS, or this iPhone's own disk and saves. */
+    /** Something an import would delete: an installed iOS 16, or its iPhone's own disk and saves. */
     static boolean hasData(Context c) {
-        return installed(c) || Guest.userDisk(c).exists();
+        return installed(c) || Guest.userDisk(c, Guest.IOS16).exists();
     }
 
     /**
@@ -76,7 +77,8 @@ final class Installer {
      * new disk needs. Not on the UI thread.
      */
     static void install(Context c, InputStream in, long total, Progress p) throws IOException {
-        Guest.erase(c);
+        Guest.erase(c, Guest.IOS16);    // iOS 16's own iPhone only: never iOS 26's or the watch's
+        Guest.select(c, Guest.IOS16);
         deleteTree(dir(c));
         File part = new File(c.getFilesDir(), "ios16.part");
         deleteTree(part);
@@ -115,7 +117,7 @@ final class Installer {
             if (GuestImage.softKeyboard(k)) {
                 Files.write(payload.toPath(), k);
             }
-            prepareBoot(c, part);       // fails here, not at the first start, if the kernel does not fit
+            prepareBoot(c, part, CpuPlan.forThisPhone(c).smp);  // fails here, not at the first start, if the kernel does not fit
             File d = dir(c);
             if (!part.renameTo(d)) {
                 throw new IOException("cannot move " + part + " to " + d);

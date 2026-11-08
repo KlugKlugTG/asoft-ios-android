@@ -65,6 +65,37 @@ Java_com_asoft_ios_Render_createGuestRam(JNIEnv *env, jclass cls, jlong size)
     return ram_fd;
 }
 
+/* No guest RAM of ours any more (iOS 26 keeps its own): the pages go back to the phone. */
+JNIEXPORT void JNICALL
+Java_com_asoft_ios_Render_closeGuestRam(JNIEnv *env, jclass cls)
+{
+    if (ram_fd >= 0) {
+        close(ram_fd);
+        ram_fd = -1;
+    }
+}
+
+/*
+ * iOS 26 (vresearch, pvg=reims) draws on the host GPU and reads each frame back into the
+ * console's surface: QEMU puts that surface in this memfd (ASOFT_FRAME_FD), so its frames are
+ * mapped here exactly as iOS 16's framebuffer is from its RAM.
+ */
+static int frame_fd = -1;
+
+JNIEXPORT jint JNICALL
+Java_com_asoft_ios_Render_createFrameMemory(JNIEnv *env, jclass cls, jlong size)
+{
+    if (frame_fd >= 0) {
+        close(frame_fd);
+    }
+    frame_fd = syscall(__NR_memfd_create, "guest-frame", 0);     /* no CLOEXEC: QEMU inherits it */
+    if (frame_fd < 0 || ftruncate(frame_fd, size) < 0) {
+        LOGE("frame memfd: %s", strerror(errno));
+        return -1;
+    }
+    return frame_fd;
+}
+
 /*
  * fork + exec of QEMU with @argv and @envp, stdout and stderr to @log, keeping ram_fd.
  * Java's ProcessBuilder closes every descriptor but 0-2 in the child, hence this.
@@ -132,6 +163,14 @@ Java_com_asoft_ios_Render_terminate(JNIEnv *env, jclass cls, jint pid)
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_asoft_ios_Render_forceKill(JNIEnv *env, jclass cls, jint pid)
+{
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+    }
+}
+
 /* the guest RAM memfd of process @pid: the largest memfd it holds open */
 static int open_guest_ram(int pid, char *name, size_t namelen)
 {
@@ -187,7 +226,18 @@ Java_com_asoft_ios_Render_openFramebuffer(JNIEnv *env, jclass cls, jint pid, jlo
                                           jint width, jint height, jint stride)
 {
     char name[256] = "";
-    int fd = open_guest_ram(pid, name, sizeof(name));
+    int fd;
+
+    if (offset < 0) {           /* iOS 26: the frame memfd, from its start */
+        if (frame_fd < 0) {
+            return (*env)->NewStringUTF(env, "no frame memfd");
+        }
+        snprintf(name, sizeof(name), "guest-frame (ours, fd %d)", frame_fd);
+        fd = dup(frame_fd);
+        offset = 0;
+    } else {
+        fd = open_guest_ram(pid, name, sizeof(name));
+    }
     if (fd < 0) {
         char msg[160];
         snprintf(msg, sizeof(msg), "no guest RAM memfd in /proc/%d/fd (%s)", pid, strerror(errno));

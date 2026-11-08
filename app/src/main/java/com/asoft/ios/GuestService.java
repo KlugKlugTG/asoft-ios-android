@@ -20,6 +20,30 @@ import java.io.PrintWriter;
 public class GuestService extends Service {
     private static final String CHANNEL = "guest";
     private PowerManager.WakeLock wakeLock;
+    /** Power saving switched on while iOS runs: say once that iOS slows down now. */
+    private android.content.BroadcastReceiver powerChanged;
+
+    private void watchPowerSaving() {
+        if (powerChanged != null) {
+            return;
+        }
+        powerChanged = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                if (Guest.running() && PowerCheck.saverOn(c)) {
+                    android.widget.Toast.makeText(c, "Power saving is on: iOS runs much slower until you turn it off",
+                            android.widget.Toast.LENGTH_LONG).show();
+                    note("power saving on while iOS runs" + (PowerCheck.capped() != null ? " (" + PowerCheck.capped() + ")" : ""));
+                }
+            }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(powerChanged, f, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(powerChanged, f);
+        }
+    }
 
     @Override
     public IBinder onBind(Intent i) {
@@ -34,8 +58,6 @@ public class GuestService extends Service {
                 PendingIntent.FLAG_IMMUTABLE);
         PendingIntent save = PendingIntent.getService(this, 1,
                 new Intent(this, GuestService.class).setAction("save"), PendingIntent.FLAG_IMMUTABLE);
-        PendingIntent off = PendingIntent.getService(this, 2,
-                new Intent(this, GuestService.class).setAction("poweroff"), PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("ASoftware iOS")
@@ -43,8 +65,9 @@ public class GuestService extends Service {
                 .setContentIntent(open)
                 .setOngoing(true);
         if (!Guest.saving()) {
+            // Turn off (no save: the next start boots) only in the app, behind its question: one tap here,
+            // taken for "close", threw iOS's state away (2026-11-06)
             n.addAction(new Notification.Action.Builder(null, "Save and close", save).build());
-            n.addAction(new Notification.Action.Builder(null, "Turn off", off).build());
         }
         startForeground(2, n.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
     }
@@ -78,7 +101,9 @@ public class GuestService extends Service {
         boolean load = "load".equals(action);
         String loadTag = load ? intent.getStringExtra("tag")
                 : intent != null && intent.getBooleanExtra("cold", false) ? null : Guest.QUICK;
-        foreground("iOS 16 is running");
+        foreground(Guest.osName(Guest.selected(this)) + " is running");
+        watchPowerSaving();
+        note("power: saving " + (PowerCheck.saverOn(this) ? "on" : "off") + ", " + PowerCheck.describe());
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "asoft:guest");
             wakeLock.acquire();
@@ -86,24 +111,47 @@ public class GuestService extends Service {
         // fork from the app's large process: not on the main thread
         new Thread(() -> {
             try {
-                if (load && Guest.running()) {
+                if (load && Guest.running() && !Guest.saving()) {
                     Guest.state = "switching";
                     Guest.stopAndWait();
+                } else if (Guest.running() && !Guest.saving()) {
+                    return;     // iOS runs already: nothing to start
                 }
+                // the QEMU before may still be ending (a save and close's last second): it holds the disk
+                if (!Guest.waitEnded(30_000)) {
+                    note("start: the iOS before is still closing after 30 s");
+                }
+                Guest.startError = null;
                 Guest.start(this, loadTag);
+                MemoryCleaner.start(this);
                 if (Guest.resumed && !resumedOk()) {
-                    // a state this QEMU cannot load (another build, other options): boot instead;
-                    // the quick-boot state goes, a save the user named stays
-                    note("the saved state " + loadTag + " did not load (" + Guest.lastWords(this) + "); booting");
-                    Guest.stop();
-                    if (Guest.QUICK.equals(loadTag)) {
+                    boolean forGood = Guest.loadFailedForGood(this);
+                    // a state this QEMU cannot load (another build, other options): boot instead; the
+                    // quick-boot state goes, a save the user named stays. One QEMU could not even open
+                    // (the disk locked, no memory) says nothing about the state: it stays
+                    note("the saved state " + loadTag + " did not load (" + Guest.lastWords(this) + ")"
+                            + (forGood ? "; booting" : "; QEMU did not get to it, the state stays; booting"));
+                    Guest.stopAndWait();
+                    if (forGood && Guest.QUICK.equals(loadTag)) {
                         Guest.dropQuick(this);
                     }
+                    Guest.waitEnded(30_000);
                     Guest.start(this, null);
+                }
+                if (Guest.ios26Running() && Guest.running()) {
+                    AutoSave.start(this, Guest.pid(this), Guest.resumed);
+                    HintBoost.start(this, Guest.pid(this));
                 }
             } catch (IOException e) {
                 note("start failed: " + e);
-                stopSelf();
+                if (!Guest.running()) {
+                    // the screens say why (it was only in the log: "iOS 26 does not start", 2026-11-06)
+                    Guest.startError = e.getMessage();
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                            android.widget.Toast.makeText(this, Guest.osName(Guest.os(this)) + " did not start: " + e.getMessage(),
+                                    android.widget.Toast.LENGTH_LONG).show());
+                    stopSelf();
+                }
             }
         }, "guest-start").start();
         return START_NOT_STICKY;
@@ -152,6 +200,10 @@ public class GuestService extends Service {
 
     @Override
     public void onDestroy() {
+        if (powerChanged != null) {
+            unregisterReceiver(powerChanged);
+            powerChanged = null;
+        }
         Guest.stop();
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
