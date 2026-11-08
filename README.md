@@ -34,7 +34,30 @@ boot. The iOS 26 card appears once its files are in `/data/local/tmp/asoft/ios26
 from the Windows install; there is no Send-ToPhone package for iOS 26 yet). 3x (sharp) or 2x
 (faster) screen under More.
 
-## Setting it up
+## Installing on the phone from Apple (no PC)
+
+Set up > Install on this phone from Apple builds iOS 16 on the phone itself, the way the Windows
+installer does: no PC, no adb.
+
+- It downloads only the parts of Apple's iOS 16.7.16 IPSW (iPhone X) the disk is made of, 5.8 GB,
+  straight from Apple's servers: 8 connections, 32 MB pieces written in place, each part checked
+  against the IPSW's own CRC-32. It picks the fastest of Apple's servers (the phone's own DNS
+  answer was a cache giving 0.1 MB/s per connection, Apple's servers up to 6 MB/s), goes on after
+  an app kill, a restart or a lost network, can wait for Wi-Fi, and has Pause and Cancel on its
+  notification.
+- Then the Windows installer's helper VM (a small arm64 Linux that comes with the app) runs in the
+  app's QEMU: it makes the kernel with the iPhone's device tree and builds the iOS disk from the
+  downloaded images, as `Build-iOSDisk.ps1` does on Windows. The disk is packed (6.2 GB) and set up
+  like one brought from a PC, then iOS is started once until its lock screen and saved, so your
+  first start takes seconds.
+- On a Galaxy S25 Ultra: the disk 32 minutes, packing 2 minutes, iOS's first start 38 minutes, plus
+  the download (55 minutes on a slow evening for Apple's servers; the phone's Wi-Fi allows about
+  18). It needs about 20-26 GB free while it runs and leaves about 10 GB (the disk and iOS's own
+  data with its save). Keep the phone on its charger.
+
+Everything it downloads comes from Apple's servers; the app and this repository hold no Apple file.
+
+## Setting it up from a PC
 
 1. On a Windows PC, install ASoftware iOS with iOS 16.
 2. Install this app on the phone (arm64, Android 10 or later, about 12 GB free).

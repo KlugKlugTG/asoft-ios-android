@@ -6,3 +6,7 @@ local.properties
 # QEMU and its Termux libraries, copied from the phone by pull-libs.sh
 app/src/main/jniLibs/
 app/src/main/jniLibs26/
+# what the setup from Apple brings, copied by pull-setup.sh from an asoft-ios checkout
+app/src/main/assets/helper/
+app/src/main/assets/xnu/
+app/src/main/assets/setup/

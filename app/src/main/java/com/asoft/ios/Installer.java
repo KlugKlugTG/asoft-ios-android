@@ -87,37 +87,8 @@ final class Installer {
         }
         try {
             untar(in, part, total, p);
-            for (String n : PARTS) {
-                if (!new File(part, n).isFile()) {
-                    throw new IOException("not an ASoftware iOS bundle: no " + n);
-                }
-            }
-            String manifest = new String(Files.readAllBytes(new File(part, PARTS[0]).toPath()), StandardCharsets.UTF_8);
-            try {
-                org.json.JSONObject m = new org.json.JSONObject(manifest);
-                if (m.optInt("format") != 1 || !"16".equals(m.optString("ios"))) {
-                    throw new IOException("a bundle this app does not know: " + manifest.trim());
-                }
-            } catch (org.json.JSONException e) {
-                throw new IOException("bad asoft-bundle.json", e);
-            }
             p.at("Checking", 0, -1);
-            byte[] head = new byte[4];
-            try (InputStream d = Files.newInputStream(new File(part, "disk.qcow2").toPath())) {
-                if (d.read(head) != 4 || head[0] != 'Q' || head[1] != 'F' || head[2] != 'I' || head[3] != (byte) 0xfb) {
-                    throw new IOException("disk.qcow2 is not a qcow2 image");
-                }
-            }
-            File payload = new File(part, "payload.bin");
-            byte[] k = Files.readAllBytes(payload.toPath());
-            if (!GuestImage.isPayload(k)) {
-                throw new IOException("payload.bin is not a SWEETXNU payload");
-            }
-            // iOS's own keyboard (the kernel's hardware keyboard off: see patch-softkbd.py)
-            if (GuestImage.softKeyboard(k)) {
-                Files.write(payload.toPath(), k);
-            }
-            prepareBoot(c, part, CpuPlan.forThisPhone(c).smp);  // fails here, not at the first start, if the kernel does not fit
+            check(c, part);
             File d = dir(c);
             if (!part.renameTo(d)) {
                 throw new IOException("cannot move " + part + " to " + d);
@@ -126,6 +97,71 @@ final class Installer {
             deleteTree(part);
             throw e;
         }
+    }
+
+    /**
+     * Installs iOS 16 from the three files of a bundle that this phone made itself (PhoneSetup): they
+     * move from @from (the same file system) into files/ios16.part, pass the checks an import does,
+     * then the folder becomes files/ios16. As install(), iOS 16's own iPhone (user disk, saves) goes first.
+     */
+    static void finish(Context c, File from) throws IOException {
+        Guest.erase(c, Guest.IOS16);
+        Guest.select(c, Guest.IOS16);
+        deleteTree(dir(c));
+        File part = new File(c.getFilesDir(), "ios16.part");
+        deleteTree(part);
+        if (!part.mkdirs()) {
+            throw new IOException("cannot create " + part);
+        }
+        try {
+            for (String n : PARTS) {
+                if (!new File(from, n).renameTo(new File(part, n))) {
+                    throw new IOException("cannot move " + n + " into " + part);
+                }
+            }
+            check(c, part);
+            File d = dir(c);
+            if (!part.renameTo(d)) {
+                throw new IOException("cannot move " + part + " to " + d);
+            }
+        } catch (IOException | RuntimeException e) {
+            deleteTree(part);
+            throw e;
+        }
+    }
+
+    /** What an install checks in a bundle's files and makes this phone's: its manifest, a qcow2, a SWEETXNU payload. */
+    private static void check(Context c, File part) throws IOException {
+        for (String n : PARTS) {
+            if (!new File(part, n).isFile()) {
+                throw new IOException("not an ASoftware iOS bundle: no " + n);
+            }
+        }
+        String manifest = new String(Files.readAllBytes(new File(part, PARTS[0]).toPath()), StandardCharsets.UTF_8);
+        try {
+            org.json.JSONObject m = new org.json.JSONObject(manifest);
+            if (m.optInt("format") != 1 || !"16".equals(m.optString("ios"))) {
+                throw new IOException("a bundle this app does not know: " + manifest.trim());
+            }
+        } catch (org.json.JSONException e) {
+            throw new IOException("bad asoft-bundle.json", e);
+        }
+        byte[] head = new byte[4];
+        try (InputStream d = Files.newInputStream(new File(part, "disk.qcow2").toPath())) {
+            if (d.read(head) != 4 || head[0] != 'Q' || head[1] != 'F' || head[2] != 'I' || head[3] != (byte) 0xfb) {
+                throw new IOException("disk.qcow2 is not a qcow2 image");
+            }
+        }
+        File payload = new File(part, "payload.bin");
+        byte[] k = Files.readAllBytes(payload.toPath());
+        if (!GuestImage.isPayload(k)) {
+            throw new IOException("payload.bin is not a SWEETXNU payload");
+        }
+        // iOS's own keyboard (the kernel's hardware keyboard off: see patch-softkbd.py)
+        if (GuestImage.softKeyboard(k)) {
+            Files.write(payload.toPath(), k);
+        }
+        prepareBoot(c, part, CpuPlan.forThisPhone(c).smp);  // fails here, not at the first start, if the kernel does not fit
     }
 
     /** A kernel without xnu 0103 keeps the time a save was made in until it boots again. */

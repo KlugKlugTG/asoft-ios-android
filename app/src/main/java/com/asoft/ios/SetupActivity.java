@@ -32,6 +32,7 @@ public class SetupActivity extends Activity {
     private TextView status;
     private ProgressBar bar;
     private volatile boolean busy;
+    private SetupScreen fromApple;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -80,10 +81,16 @@ public class SetupActivity extends Activity {
         TextView title = text("Set up iOS 16", 26, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         if (Installer.installed(this)) {
-            text("iOS 16 is set up on this phone. Importing again replaces it: this iPhone's settings, apps and saves go.",
+            text("iOS 16 is set up on this phone. Importing or installing again replaces it: this iPhone's settings, apps and saves go.",
                     15, 0xffbbbbbb);
         }
-        text("Bring it from your PC", 18, Color.WHITE);
+        // no PC: Apple's files, the PC installer's helper VM (PhoneSetup)
+        if (fromApple == null) {
+            fromApple = new SetupScreen(this);
+        }
+        box.addView(fromApple.view());
+        TextView pc = text("Or bring it from your PC", 18, Color.WHITE);
+        pc.setPadding(0, 56, 0, 28);
         text("1. Install ASoftware iOS (iOS 16) on a Windows PC.\n"
                 + "2. On the PC, run Send-ToPhone.cmd from the ASoftware iOS folder. It packs that iOS into ASoftware-iOS16.asoft (about 6.5 GB).\n"
                 + "3. With this phone on USB and USB debugging on, it sends the file here by itself. "
@@ -104,9 +111,6 @@ public class SetupActivity extends Activity {
         });
         text(String.format("%.1f GB free on this phone; iOS needs about 6.5 GB, and 4 GB more for a save.",
                 getFilesDir().getUsableSpace() / 1e9), 13, 0xff888888).setPadding(0, 28, 0, 28);
-        text("Install on this phone from Apple", 18, 0xff777777);
-        text("Not yet: building the disk here takes the phone about two hours and is still being worked on.",
-                15, 0xff777777);
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(1000);
         bar.setVisibility(View.GONE);

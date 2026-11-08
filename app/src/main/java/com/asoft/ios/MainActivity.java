@@ -583,8 +583,15 @@ public class MainActivity extends Activity {
         showFreeRam();
         showPowerWarning();
         if (!Guest.available(this)) {
+            if (SetupService.busy()) {
+                state.setText("Installing iOS 16");
+                saveInfo.setText(SetupService.state.text);
+                primary.setText("Show the install");
+                return;
+            }
             state.setText("iOS 16 is not set up");
-            saveInfo.setText("Bring it from your PC: install ASoftware iOS (iOS 16) there, then run Send-ToPhone.cmd.");
+            saveInfo.setText("Set up installs it on this phone from Apple's servers (about two hours, no PC), or brings it from "
+                    + "your PC (Send-ToPhone.cmd).");
             primary.setText("Set up");
             return;
         }

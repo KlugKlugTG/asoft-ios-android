@@ -57,6 +57,11 @@ android {
     externalNativeBuild {
         cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' }
     }
+    // the helper VM's kernels and initramfs (pull-setup.sh: *.gz.bin) are gzip already: stored, so the
+    // app reads their length without unpacking them (AssetManager.openFd)
+    androidResources {
+        noCompress += ['bin']
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
