@@ -1222,8 +1222,8 @@ final class PhoneSetup26 {
                     lastLogged = min;
                     AppLog.note(c, "setup26: watch first boot " + min + " min, the screen has " + variety + " colours");
                     if (min % 3 == 0) {
-                        // what keeps crashing (a face that does not come: 2026-11-08, a report every 40-60 s)
-                        String cr = con.run("ls /private/var/mobile/Library/Logs/CrashReporter | sed -E 's/-[0-9]{4}-.*//' | sort | uniq -c"
+                        // what keeps crashing (a face that did not come once: 2026-11-08, a report every 40-60 s); the guest has no sed or grep
+                        String cr = con.run("ls /private/var/mobile/Library/Logs/CrashReporter | cut -d- -f1 | sort | uniq -c"
                                 + " | sort -rn | head -6 | tr '\\n' ';'", 60_000, 60_000);
                         AppLog.note(c, "setup26: crash reports: " + (cr == null ? "(no answer)" : cr.trim()));
                     }
