@@ -33,6 +33,7 @@ public class SetupActivity extends Activity {
     private ProgressBar bar;
     private volatile boolean busy;
     private SetupScreen fromApple;
+    private Setup26Screen from26;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -78,7 +79,7 @@ public class SetupActivity extends Activity {
 
     private void show() {
         box.removeAllViews();
-        TextView title = text("Set up iOS 16", 26, Color.WHITE);
+        TextView title = text("Set up", 26, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         if (Installer.installed(this)) {
             text("iOS 16 is set up on this phone. Importing or installing again replaces it: this iPhone's settings, apps and saves go.",
@@ -89,6 +90,11 @@ public class SetupActivity extends Activity {
             fromApple = new SetupScreen(this);
         }
         box.addView(fromApple.view());
+        // iOS 26 and watchOS from Apple, behind the GPU check (Setup26Screen)
+        if (from26 == null) {
+            from26 = new Setup26Screen(this);
+        }
+        box.addView(from26.view());
         TextView pc = text("Or bring it from your PC", 18, Color.WHITE);
         pc.setPadding(0, 56, 0, 28);
         text("1. Install ASoftware iOS (iOS 16) on a Windows PC.\n"

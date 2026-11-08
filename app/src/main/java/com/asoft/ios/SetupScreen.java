@@ -233,6 +233,13 @@ final class SetupScreen {
                 gb(freeBytes), gb(need)));
         free.setTextColor(freeBytes < need ? ORANGE : DIM);
 
+        if (s.running && "a26".equals(s.target)) {
+            // the iOS 26 / watchOS install runs (Setup26Screen shows it); one install at a time
+            startPause.setText("iOS 26 / watchOS are being installed");
+            startPause.setEnabled(false);
+            cancel.setVisibility(View.GONE);
+            return;
+        }
         List<IpswFetch.Item> items = s.items;
         long got = 0, size = 0;
         for (IpswFetch.Item it : items) {

@@ -1,0 +1,246 @@
+package com.asoft.ios;
+
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * Can this phone's GPU run iOS 26 and watchOS? Asked before their download (they draw through reims-vgpu
+ * and metal2vulkan on Vulkan; there is no GPU-less mode on the phone). The app's own Turnip is probed in
+ * GpuCheckService (gpucheck.c: the device, its extensions and features, a compute dispatch, a render pass,
+ * a buffer over host memory and sparse binds from host memory); a pass is remembered for this build of
+ * the app and its Turnip. When Turnip fails, or the phone has no Adreno (Turnip drives Adreno GPUs only),
+ * the phone's own Vulkan driver is probed too, for the log: what it lacks is what support for it
+ * (Mali, say) would need. iOS 16 does not use the GPU and is not gated.
+ */
+final class GpuCheck {
+    private GpuCheck() {}
+
+    static native int probe(String loader, String log);
+
+    static File dir(Context c) {
+        return new File(c.getFilesDir(), "gpucheck");
+    }
+
+    /** An Adreno GPU (Qualcomm's KGSL device): the kind Turnip drives. */
+    static boolean adreno() {
+        return new File("/dev/kgsl-3d0").exists();
+    }
+
+    /** What a pass is good for: this app build and its Turnip (a new build checks again). */
+    private static String key(Context c) {
+        long turnip = new File(c.getApplicationInfo().nativeLibraryDir, "lib_libvulkan_freedreno.so.so").length();
+        try {
+            return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).getLongVersionCode() + "/" + turnip;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return "?/" + turnip;
+        }
+    }
+
+    /**
+     * Debug builds: a check without Turnip (adb: GpuCheckService is not needed for it, the setup screen's
+     * check reads the "no-turnip" setting), to see the unsupported-GPU screen and its log on a phone that passes.
+     */
+    static boolean turnipOff(Context c) {
+        return (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && c.getSharedPreferences("setup", Context.MODE_PRIVATE).getBoolean("gpucheck-no-turnip", false);
+    }
+
+    /** The check passed for this build: iOS 26 and watchOS may be downloaded. */
+    static boolean passed(Context c) {
+        return !turnipOff(c) && key(c).equals(c.getSharedPreferences("setup", Context.MODE_PRIVATE).getString("gpucheck-pass", ""));
+    }
+
+    /** The last check's outcome, for the screen. */
+    static final class Result {
+        boolean pass;
+        boolean ran;
+        String summary = "";            // one line for people
+        final List<String> missing = new ArrayList<>();
+        String report = "";             // the whole log, to copy or share
+    }
+
+    static volatile boolean running;
+
+    /** Runs the check (blocking, off the main thread): Turnip, then the system driver when it is needed. */
+    static Result run(Context c) {
+        running = true;
+        try {
+            File d = dir(c);
+            Installer.deleteTree(d);
+            d.mkdirs();
+            boolean pass = false;
+            String turnipEnd;
+            if (turnipOff(c)) {
+                turnipEnd = "skipped (Turnip turned off for a test)";
+                write(new File(d, "turnip.log"), "error: Turnip is turned off for a test (debug setting gpucheck-no-turnip)\nresult: fail\n");
+            } else if (!adreno()) {
+                turnipEnd = "skipped (no Adreno GPU: Turnip drives Adreno GPUs only)";
+                write(new File(d, "turnip.log"), "error: no /dev/kgsl-3d0: this phone has no Adreno GPU, which the app's Turnip driver needs\nresult: fail\n");
+            } else {
+                turnipEnd = once(c, "turnip");
+                pass = "pass".equals(turnipEnd);
+            }
+            if (!pass) {
+                once(c, "system");
+            }
+            c.getSharedPreferences("setup", Context.MODE_PRIVATE).edit().putString("gpucheck-pass", pass ? key(c) : "").apply();
+            Result r = last(c);
+            AppLog.note(c, "gpu check: " + (r.pass ? "pass" : "fail: " + String.join(", ", r.missing)) + " (turnip " + turnipEnd + ")");
+            return r;
+        } finally {
+            running = false;
+        }
+    }
+
+    private static void write(File f, String s) {
+        try {
+            Files.write(f.toPath(), s.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // the report says the log is missing
+        }
+    }
+
+    /** One probe in the :gpucheck process: "pass", "fail", or how it ended without a result. */
+    private static String once(Context c, String which) {
+        File d = dir(c), log = new File(d, which + ".log"), pid = new File(d, which + ".pid");
+        c.startService(new Intent(c, GpuCheckService.class).setAction(which));
+        long t0 = System.currentTimeMillis();
+        boolean seenPid = false;
+        while (System.currentTimeMillis() - t0 < 90_000) {
+            String res = resultOf(log);
+            if (res != null) {
+                return res;
+            }
+            if (pid.isFile()) {
+                seenPid = true;
+                try {
+                    String p = new String(Files.readAllBytes(pid.toPath()), StandardCharsets.US_ASCII).trim();
+                    if (!p.isEmpty() && !new File("/proc/" + p).exists()) {
+                        // gone without a result: the driver crashed the probe (its last line says where)
+                        appendLine(log, "error: the probe's process ended without a result (the driver crashed it)");
+                        appendLine(log, "result: fail");
+                        return "crashed";
+                    }
+                } catch (IOException ignored) {
+                    // being written
+                }
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return "stopped";
+            }
+        }
+        appendLine(log, "error: no result in 90 s" + (seenPid ? " (the driver hangs)" : " (the probe did not start)"));
+        appendLine(log, "result: fail");
+        return "timeout";
+    }
+
+    private static void appendLine(File f, String s) {
+        try {
+            Files.write(f.toPath(), (s + "\n").getBytes(StandardCharsets.UTF_8),
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException ignored) {
+            // nothing to tell
+        }
+    }
+
+    private static String resultOf(File log) {
+        try {
+            for (String l : Files.readAllLines(log.toPath())) {
+                if (l.startsWith("result: ")) {
+                    return l.substring(8).trim();
+                }
+            }
+        } catch (IOException ignored) {
+            // not there yet
+        }
+        return null;
+    }
+
+    private static String prop(String name) {
+        try {
+            Process p = new ProcessBuilder("getprop", name).redirectErrorStream(true).start();
+            String v = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            p.waitFor();
+            return v;
+        } catch (IOException | InterruptedException e) {
+            return "";
+        }
+    }
+
+    /** The last check's logs as a report, and what it found. */
+    static Result last(Context c) {
+        Result r = new Result();
+        File d = dir(c);
+        StringBuilder rep = new StringBuilder();
+        rep.append("ASoftware iOS GPU check\n");
+        String version = "?";
+        try {
+            version = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            // the report goes without it
+        }
+        rep.append("app: ").append(c.getPackageName()).append(' ').append(version).append('\n');
+        rep.append("phone: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append(" (").append(Build.DEVICE)
+                .append(", ").append(Build.PRODUCT).append(")\n");
+        rep.append("android: ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append("), build ")
+                .append(Build.DISPLAY).append('\n');
+        String soc = Build.VERSION.SDK_INT >= 31 ? Build.SOC_MANUFACTURER + " " + Build.SOC_MODEL : "";
+        rep.append("soc: ").append(soc).append(" / board ").append(Build.BOARD).append(" / hardware ").append(Build.HARDWARE)
+                .append(" / ro.soc.model ").append(prop("ro.soc.model")).append('\n');
+        rep.append("gpu device: ").append(adreno() ? "/dev/kgsl-3d0 (Adreno)" : new File("/dev/mali0").exists() ? "/dev/mali0 (Mali)" : "neither kgsl nor mali")
+                .append(", ro.hardware.vulkan ").append(prop("ro.hardware.vulkan")).append(", ro.hardware.egl ").append(prop("ro.hardware.egl")).append('\n');
+        rep.append("cpu: ").append(Build.SUPPORTED_ABIS[0]).append(", ").append(Runtime.getRuntime().availableProcessors())
+                .append(" cores; native engine needs: ").append(Guest.nativeMissing().isEmpty() ? "all there" : Guest.nativeMissing()).append('\n');
+        rep.append("date: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT).format(new java.util.Date())).append('\n');
+        String gpu = "", driver = "";
+        for (String which : new String[] {"turnip", "system"}) {
+            File log = new File(d, which + ".log");
+            if (!log.isFile()) {
+                continue;
+            }
+            r.ran = true;
+            rep.append("\n== ").append("turnip".equals(which) ? "the app's Turnip driver (what iOS 26 uses)" : "the phone's own Vulkan driver (for the log)").append('\n');
+            try {
+                for (String l : Files.readAllLines(log.toPath())) {
+                    rep.append(l).append('\n');
+                    if (!"turnip".equals(which)) {
+                        if (l.startsWith("gpu: ") && gpu.isEmpty()) {
+                            gpu = l.substring(5);
+                        }
+                        continue;
+                    }
+                    if (l.startsWith("result: ")) {
+                        r.pass = l.endsWith("pass");
+                    } else if (l.startsWith("lacks: ")) {
+                        r.missing.add(l.substring(7));
+                    } else if (l.startsWith("gpu: ")) {
+                        gpu = l.substring(5);
+                    } else if (l.startsWith("driver: ")) {
+                        driver = l.substring(8);
+                    } else if (l.startsWith("error: ") && r.missing.isEmpty()) {
+                        r.missing.add(l.substring(7));
+                    }
+                }
+            } catch (IOException e) {
+                rep.append("(cannot read: ").append(e.getMessage()).append(")\n");
+            }
+        }
+        r.report = rep.toString();
+        r.summary = r.pass ? "Your GPU (" + gpu + ") can run iOS 26 and watchOS." + (driver.isEmpty() ? "" : " Driver: " + driver)
+                : "This phone's GPU" + (gpu.isEmpty() ? "" : " (" + gpu + ")") + " is not supported yet."
+                + (r.missing.isEmpty() ? "" : " It lacks: " + String.join("; ", r.missing) + ".");
+        return r;
+    }
+}

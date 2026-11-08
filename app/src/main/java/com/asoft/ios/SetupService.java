@@ -14,6 +14,7 @@ import android.net.NetworkCapabilities;
 import android.os.IBinder;
 import android.os.PowerManager;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,7 +36,8 @@ public class SetupService extends Service {
         volatile int pct = -1;
         volatile String text = "";
         volatile String error;                  // why it stopped, in plain words; null while it runs or when done
-        volatile boolean running, paused, waitingForWifi, waitingForNetwork, finished;
+        volatile boolean running, paused, waitingForWifi, waitingForNetwork, finished, held;
+        volatile String target = "ios16";       // "ios16" (PhoneSetup) or "a26" (PhoneSetup26: iOS 26 and/or watchOS)
         volatile List<IpswFetch.Item> items = new ArrayList<>();
         volatile long received;
         volatile int connections;
@@ -60,7 +62,26 @@ public class SetupService extends Service {
     }
 
     static void start(Context c) {
-        c.startForegroundService(new Intent(c, SetupService.class).setAction("start"));
+        c.startForegroundService(new Intent(c, SetupService.class).setAction("start").putExtra("what", "ios16"));
+    }
+
+    /** iOS 26 and/or watchOS (PhoneSetup26.setWants says which), from Apple. */
+    static void startA26(Context c) {
+        c.startForegroundService(new Intent(c, SetupService.class).setAction("start").putExtra("what", "a26"));
+    }
+
+    private static String title(boolean done) {
+        if (!"a26".equals(state.target)) {
+            return done ? "iOS 16 is set up" : "Installing iOS 16";
+        }
+        return done ? "iOS 26 / watchOS are set up" : "Installing iOS 26 / watchOS";
+    }
+
+    /** The step can pause: a download, a decrypt (both go on where they were), a helper VM job (held). */
+    static boolean pausable(String step) {
+        return "ipsw".equals(step) || step.isEmpty() || step.endsWith(":fetch") || step.endsWith(":decrypt")
+                || step.contains(":") && !(step.endsWith(":firstboot") || step.endsWith(":wallpaper") || step.endsWith(":pack")
+                        || step.endsWith(":unpack"));
     }
 
     static void pause(Context c) {
@@ -86,7 +107,7 @@ public class SetupService extends Service {
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, SetupActivity.class), PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle(state.finished ? "iOS 16 is set up" : "Installing iOS 16")
+                .setContentTitle(title(state.finished))
                 .setContentText(text)
                 .setContentIntent(open)
                 .setOnlyAlertOnce(true)
@@ -97,7 +118,7 @@ public class SetupService extends Service {
             } else {
                 n.setProgress(0, 0, true);
             }
-            if (state.paused || pause || "ipsw".equals(state.step) || state.step.isEmpty()) {     // only the download pauses
+            if (state.paused || pause || pausable(state.step)) {
                 n.addAction(new Notification.Action.Builder(null, state.paused || pause ? "Resume" : "Pause",
                         PendingIntent.getService(this, 1, new Intent(this, SetupService.class)
                                 .setAction(state.paused || pause ? "start" : "pause"), PendingIntent.FLAG_IMMUTABLE)).build());
@@ -120,7 +141,7 @@ public class SetupService extends Service {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         switch (a) {
             case "pause":
-                if ("ipsw".equals(state.step) || worker == null) {     // only the download pauses
+                if (pausable(state.step) || worker == null) {
                     pause = true;
                     post("Pausing: " + state.text, state.pct);
                 }
@@ -130,7 +151,11 @@ public class SetupService extends Service {
                 pause = false;
                 if (worker == null) {
                     new Thread(() -> {
-                        Installer.deleteTree(PhoneSetup.work(this));
+                        if ("a26".equals(state.target)) {
+                            cancelA26(this);
+                        } else {
+                            Installer.deleteTree(PhoneSetup.work(this));
+                        }
                         state.step = "";
                         state.items = new ArrayList<>();
                         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -141,6 +166,10 @@ public class SetupService extends Service {
             default:
                 pause = false;
                 if (worker == null) {
+                    String what = intent == null ? null : intent.getStringExtra("what");
+                    if (what != null) {
+                        state.target = what;
+                    }
                     begin();
                 }
                 break;
@@ -180,6 +209,9 @@ public class SetupService extends Service {
 
     /** Still downloading: nothing after the download needs the network. */
     private boolean downloadLeft() {
+        if ("a26".equals(state.target)) {
+            return state.step.isEmpty() || state.step.endsWith(":fetch");
+        }
         return !PhoneSetup.done(this, "ipsw") && !PhoneSetup.done(this, "disk");
     }
 
@@ -211,6 +243,13 @@ public class SetupService extends Service {
             wakeLock.acquire();
         }
         IpswFetch[] current = new IpswFetch[1];
+        boolean a26 = "a26".equals(state.target);
+        // a helper VM job is held (SIGSTOP) while paused, too hot or low on battery off the charger, and goes on after
+        Helper.hold = () -> {
+            boolean h = pause || PhoneSetup26.shouldHold(this);
+            state.held = h;
+            return h;
+        };
         worker = new Thread(() -> {
             long t0 = System.currentTimeMillis();
             AppLog.note(this, "setup: start (" + getFilesDir().getUsableSpace() / 1_000_000_000L + " GB free)");
@@ -231,16 +270,20 @@ public class SetupService extends Service {
                     }
                     try {
                         long free = getFilesDir().getUsableSpace();
-                        long need = PhoneSetup.needBytes(this);
+                        long need = a26 ? PhoneSetup26.needBytes(this) : PhoneSetup.needBytes(this);
                         if (free < need) {
                             throw new IOException(String.format(Locale.ROOT,
                                     "Not enough room: %.1f GB free, about %.1f GB needed. Free some space, then tap Resume.", free / 1e9, need / 1e9));
                         }
                         // the helper VM gets every core, as Build-iOSDisk.ps1 gives it up to 8 (measured with 8)
-                        PhoneSetup.run(this, Math.min(8, Runtime.getRuntime().availableProcessors()), progress(), this::stopNow, current);
+                        if (a26) {
+                            PhoneSetup26.run(this, Math.min(8, Runtime.getRuntime().availableProcessors()), progress(), this::stopNow, current);
+                        } else {
+                            PhoneSetup.run(this, Math.min(8, Runtime.getRuntime().availableProcessors()), progress(), this::stopNow, current);
+                        }
                         state.finished = true;
                         state.step = "done";
-                        state.text = "iOS 16 is set up";
+                        state.text = title(true);
                         AppLog.note(this, "setup: done in " + (System.currentTimeMillis() - t0) / 1000 + " s");
                         break;
                     } catch (IOException e) {
@@ -256,7 +299,11 @@ public class SetupService extends Service {
                     }
                 }
                 if (cancel) {
-                    Installer.deleteTree(PhoneSetup.work(this));
+                    if (a26) {
+                        cancelA26(this);
+                    } else {
+                        Installer.deleteTree(PhoneSetup.work(this));
+                    }
                     state.step = "";
                     state.items = new ArrayList<>();
                     state.text = "Cancelled";
@@ -267,9 +314,11 @@ public class SetupService extends Service {
             } finally {
                 state.running = false;
                 state.paused = false;
+                state.held = false;
+                Helper.hold = null;
                 worker = null;
                 if (state.finished) {
-                    post("iOS 16 is set up: open ASoftware iOS and tap Start iOS 16", 100);
+                    post(a26 ? "Set up: open ASoftware iOS and choose iOS 26 or watchOS" : "iOS 16 is set up: open ASoftware iOS and tap Start iOS 16", 100);
                     stopForeground(STOP_FOREGROUND_DETACH);
                 } else if (state.error != null) {
                     post("Stopped: " + state.error, -1);
@@ -291,7 +340,11 @@ public class SetupService extends Service {
         if (cancel) {
             return true;
         }
-        boolean downloading = "ipsw".equals(state.step);
+        boolean downloading = "ipsw".equals(state.step) || state.step.endsWith(":fetch");
+        // a decrypt stops at its next cluster for Pause (it goes on from there); a helper job is held instead
+        if (state.step.endsWith(":decrypt") && pause) {
+            return true;
+        }
         return downloading && (pause || noWifi() || noNetwork());
     }
 
@@ -309,7 +362,7 @@ public class SetupService extends Service {
                     loggedStep = step;
                     loggedPct = pct;
                     AppLog.note(SetupService.this, "setup: " + step + (pct >= 0 ? " " + pct + "%" : "") + ": " + text
-                            + ("ipsw".equals(step) ? String.format(Locale.ROOT, " (%.1f MB/s, %d connections)", state.mbps, state.connections) : ""));
+                            + ("ipsw".equals(step) || step.endsWith(":fetch") ? String.format(Locale.ROOT, " (%.1f MB/s, %d connections)", state.mbps, state.connections) : ""));
                 }
                 state.step = step;
                 state.pct = pct;
@@ -341,7 +394,7 @@ public class SetupService extends Service {
                     done += it.done.get();
                     total += it.total;
                 }
-                step("ipsw", total > 0 ? (int) (done * 100 / total) : -1,
+                step("a26".equals(state.target) ? state.step : "ipsw", total > 0 ? (int) (done * 100 / total) : -1,
                         String.format(Locale.ROOT, "Downloading from Apple: %.1f of %.1f GB", done / 1e9, total / 1e9));
             }
 
@@ -364,6 +417,41 @@ public class SetupService extends Service {
                 }
             }
         };
+    }
+
+    /**
+     * Cancel of iOS 26 / watchOS: what was downloaded and built for them goes; the shared part stays when an OS
+     * already rests on it (it is small, and the other OS would need it again), and an installed OS stays.
+     */
+    static void cancelA26(Context c) {
+        File w = PhoneSetup26.work(c);
+        boolean keepShared = PhoneSetup26.installed(c, PhoneSetup26.IOS26) || PhoneSetup26.installed(c, PhoneSetup26.WATCH);
+        if (!keepShared) {
+            Installer.deleteTree(w);
+            return;
+        }
+        for (String n : new String[] {"iphone", "os", "install", "dsc", "dscpatch"}) {
+            Installer.deleteTree(new File(w, n));
+        }
+        File[] l = w.listFiles();
+        if (l != null) {
+            for (File f : l) {
+                if (f.getName().endsWith(".qcow2")) {
+                    f.delete();
+                }
+            }
+        }
+        for (String g : new String[] {PhoneSetup26.IOS26, PhoneSetup26.WATCH}) {
+            if (PhoneSetup26.installed(c, g)) {
+                continue;
+            }
+            if (PhoneSetup26.WATCH.equals(g)) {
+                Installer.deleteTree(new File(w, "watchos"));
+            }
+            for (String[] st : PhoneSetup26.steps(g)) {
+                new File(w, "phone/" + g + "-" + st[0] + ".done").delete();
+            }
+        }
     }
 
     /** An exception as the user should read it. */

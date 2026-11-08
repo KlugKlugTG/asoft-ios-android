@@ -56,6 +56,45 @@ final class Helper {
         String last = "";       // the last ASOFT: line, for an error message
     }
 
+    /**
+     * Asked twice a second while a job runs: true holds the VM (SIGSTOP to QEMU and its native-engine stub
+     * processes, SIGCONT once it says false). The setup sets it to its thermal check: a hot phone pauses a
+     * build rather than stopping it (a job cannot be resumed half way, but a held one goes on as it was).
+     */
+    static volatile BooleanSupplier hold;
+    static volatile boolean held;
+
+    /** @pid and its children (the native EL0 engine's stubs), by /proc's parent links. */
+    private static List<Integer> family(int pid) {
+        List<Integer> out = new ArrayList<>();
+        out.add(pid);
+        File[] procs = new File("/proc").listFiles();
+        if (procs != null) {
+            for (File p : procs) {
+                String n = p.getName();
+                if (n.isEmpty() || !Character.isDigit(n.charAt(0))) {
+                    continue;
+                }
+                try {
+                    String st = new String(java.nio.file.Files.readAllBytes(new File(p, "stat").toPath()), StandardCharsets.US_ASCII);
+                    String[] f = st.substring(st.lastIndexOf(')') + 2).split(" ");
+                    if (Integer.parseInt(f[1]) == pid) {
+                        out.add(Integer.parseInt(n));
+                    }
+                } catch (IOException | RuntimeException ignored) {
+                    // gone, or another app's
+                }
+            }
+        }
+        return out;
+    }
+
+    private static void signal(int pid, int sig) {
+        for (int p : family(pid)) {
+            android.os.Process.sendSignal(p, sig);
+        }
+    }
+
     private static final Pattern PROGRESS = Pattern.compile("^ASOFT: progress (\\d+) (.*)$");
     private static final Pattern DONE = Pattern.compile("^ASOFT: done (-?\\d+)");
     private static final Pattern OUT = Pattern.compile("^ASOFT: out (\\d+)");
@@ -187,7 +226,18 @@ final class Helper {
                 if (!alive) {
                     break;
                 }
+                BooleanSupplier h = hold;
+                boolean want = h != null && h.getAsBoolean();
+                if (want != held) {
+                    held = want;
+                    signal(pid, want ? 19 : 18);        // SIGSTOP, SIGCONT
+                    AppLog.note(c, "helper " + job + ": " + (want ? "held (the phone is hot)" : "goes on"));
+                }
                 if (cancelled.getAsBoolean()) {
+                    if (held) {
+                        signal(pid, 18);
+                        held = false;
+                    }
                     Render.terminate(pid);
                     for (int i = 0; i < 50 && Render.alive(pid); i++) {
                         Thread.sleep(100);
