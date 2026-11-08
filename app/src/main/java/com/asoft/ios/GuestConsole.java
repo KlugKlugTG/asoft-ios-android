@@ -14,12 +14,17 @@ import java.nio.charset.StandardCharsets;
  * guest-shell.py in Java, over the console's UNIX socket (Guest.startSetup). Each command goes as
  * echo @@TAG"S"@@; CMD; echo @@TAG"E"@@, so its output is told from the console's echo and the kernel's
  * messages; one that gets no answer is sent again with a new tag (idempotent commands only).
+ *
+ * While connected, a reader thread drains the console all the time. QEMU's socket chardev writes the
+ * guest's console output with the main lock held and waits when the socket is full: a client that stops
+ * reading froze the whole watch 30 s after its last command (2026-11-08, the kernel's AppleSEPKeyStore
+ * lines filled the socket). guest-shell.py on the PC disconnects after each call, so it never met this.
  */
 final class GuestConsole implements AutoCloseable {
     private final File path;
     private LocalSocket s;
-    private InputStream in;
     private OutputStream out;
+    private Thread reader;
     private final StringBuilder buf = new StringBuilder();
     private int n;
 
@@ -27,7 +32,7 @@ final class GuestConsole implements AutoCloseable {
         this.path = path;
     }
 
-    private boolean connect() {
+    private synchronized boolean connect() {
         if (s != null) {
             return true;
         }
@@ -37,14 +42,39 @@ final class GuestConsole implements AutoCloseable {
         try {
             LocalSocket l = new LocalSocket();
             l.connect(new LocalSocketAddress(path.getPath(), LocalSocketAddress.Namespace.FILESYSTEM));
-            l.setSoTimeout(500);
             s = l;
-            in = l.getInputStream();
             out = l.getOutputStream();
+            InputStream in = l.getInputStream();
+            reader = new Thread(() -> drain(l, in), "guest-console");
+            reader.setDaemon(true);
+            reader.start();
             out.write('\r');
             return true;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    private void drain(LocalSocket l, InputStream in) {
+        byte[] b = new byte[65536];
+        try {
+            int r;
+            while ((r = in.read(b)) >= 0) {
+                synchronized (buf) {
+                    buf.append(new String(b, 0, r, StandardCharsets.ISO_8859_1));
+                    if (buf.length() > (4 << 20)) {
+                        buf.delete(0, buf.length() - (1 << 20));
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+            // closed
+        }
+        synchronized (this) {
+            if (s == l) {
+                s = null;
+                out = null;
+            }
         }
     }
 
@@ -60,33 +90,28 @@ final class GuestConsole implements AutoCloseable {
             String tag = "G" + (System.currentTimeMillis() % 1_000_000_000L) + n + "G";
             String start = "@@" + tag + "S@@", end = "@@" + tag + "E@@";
             try {
-                out.write(("echo @@" + tag + "\"S\"@@; " + cmd + "; echo @@" + tag + "\"E\"@@\r").getBytes(StandardCharsets.UTF_8));
-                out.flush();
+                OutputStream o;
+                synchronized (this) {
+                    o = out;
+                }
+                if (o == null) {
+                    continue;
+                }
+                o.write(("echo @@" + tag + "\"S\"@@; " + cmd + "; echo @@" + tag + "\"E\"@@\r").getBytes(StandardCharsets.UTF_8));
+                o.flush();
                 long again = Math.min(until, System.currentTimeMillis() + retryMs);
-                byte[] b = new byte[65536];
                 while (System.currentTimeMillis() < again) {
-                    int r;
-                    try {
-                        r = in.read(b);
-                    } catch (java.net.SocketTimeoutException e) {
-                        r = 0;
-                    }
-                    if (r < 0) {
-                        throw new IOException("the console closed");
-                    }
-                    if (r > 0) {
-                        buf.append(new String(b, 0, r, StandardCharsets.ISO_8859_1));
-                        if (buf.length() > (4 << 20)) {
-                            buf.delete(0, buf.length() - (1 << 20));
+                    synchronized (buf) {
+                        int i = buf.indexOf(start);
+                        int j = i >= 0 ? buf.indexOf(end, i + 1) : -1;
+                        if (j > i && i >= 0) {
+                            String got = buf.substring(i + start.length(), j);
+                            buf.delete(0, j + end.length());
+                            return new String(got.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8)
+                                    .replaceAll("^[\r\n]+|[\r\n]+$", "");
                         }
                     }
-                    int i = buf.indexOf(start);
-                    int j = i >= 0 ? buf.indexOf(end, i + 1) : -1;
-                    if (j > i && i >= 0) {
-                        String o = buf.substring(i + start.length(), j);
-                        buf.delete(0, j + end.length());
-                        return new String(o.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8).replaceAll("^[\r\n]+|[\r\n]+$", "");
-                    }
+                    sleep(200);
                 }
             } catch (IOException e) {
                 close();
@@ -119,7 +144,7 @@ final class GuestConsole implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         if (s != null) {
             try {
                 s.close();
@@ -128,7 +153,6 @@ final class GuestConsole implements AutoCloseable {
             }
         }
         s = null;
-        in = null;
         out = null;
     }
 }

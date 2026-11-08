@@ -1201,6 +1201,7 @@ final class PhoneSetup26 {
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         boolean ark = false;
+        long lastLogged = -1;
         try {
             while (true) {
                 if (cancelled.getAsBoolean()) {
@@ -1216,6 +1217,10 @@ final class PhoneSetup26 {
                     AppLog.note(c, "setup26: the watch's data ark after " + (System.currentTimeMillis() - t0) / 1000 + " s");
                 }
                 int variety = Guest.frameVariety();
+                if (ark && min != lastLogged) {
+                    lastLogged = min;
+                    AppLog.note(c, "setup26: watch first boot " + min + " min, the screen has " + variety + " colours");
+                }
                 if (ark && variety > 40) {
                     AppLog.note(c, "setup26: the watch face after " + (System.currentTimeMillis() - t0) / 1000 + " s (" + variety + " colours)");
                     break;
