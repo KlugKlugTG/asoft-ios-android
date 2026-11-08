@@ -658,6 +658,9 @@ final class PhoneSetup26 {
             @Override
             public void line(String text) {
                 p.log(text);
+                if (text.startsWith("time zone ") || text.startsWith("region ") || text.endsWith("-hour clock")) {
+                    AppLog.note(c, "setup26: " + text.trim());
+                }
             }
         };
         Helper.Result r = Helper.run(c, "run", all, cpus, jd, l, cancelled, true);

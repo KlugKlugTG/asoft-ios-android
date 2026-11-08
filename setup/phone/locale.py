@@ -17,6 +17,31 @@ ZONES = '/var/db/timezone/zoneinfo/'
 PREFS = 'private/var/mobile/Library/Preferences/.GlobalPreferences.plist'
 
 
+def say(text):
+    # ASOFT: lines reach the app (Helper), which puts these into its log
+    print('ASOFT: ' + text, flush=True)
+
+
+def inside(R, path, depth=0):
+    """@path as the guest sees it, as a path under the root R: the guest's links are absolute
+    (/private/var/db/timezone/zoneinfo -> /usr/share/zoneinfo.default, /usr/share/zoneinfo ->
+    /var/db/timezone/zoneinfo), so os.path from outside would follow them into the helper's own /."""
+    parts = [x for x in path.split('/') if x]
+    cur = ''
+    for i, part in enumerate(parts):
+        nxt = cur + '/' + part
+        full = os.path.join(R, nxt.lstrip('/'))
+        if os.path.islink(full):
+            if depth > 40:
+                return None
+            t = os.readlink(full)
+            base = t if t.startswith('/') else os.path.dirname(nxt) + '/' + t
+            rest = '/'.join(parts[i + 1:])
+            return inside(R, os.path.normpath(base + ('/' + rest if rest else '')), depth + 1)
+        cur = nxt
+    return os.path.join(R, cur.lstrip('/'))
+
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument('root')
@@ -27,9 +52,9 @@ def main():
     R = o.root
     if o.tz:
         if not re.fullmatch(r'[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*', o.tz):
-            print('time zone %s: not a zone name' % o.tz)
-        elif not any(os.path.exists(os.path.join(R, p + o.tz)) for p in ('private/var/db/timezone/zoneinfo/', 'usr/share/zoneinfo/')):
-            print('time zone %s: not in this image' % o.tz)
+            say('time zone %s: not a zone name' % o.tz)
+        elif not any(os.path.isfile(inside(R, p + o.tz) or '') for p in (ZONES, '/usr/share/zoneinfo.default/', '/usr/share/zoneinfo/')):
+            say('time zone %s: not in this image' % o.tz)
         else:
             link = os.path.join(R, LINK)
             os.makedirs(os.path.dirname(link), exist_ok=True)
@@ -38,9 +63,9 @@ def main():
                 os.remove(tmp)
             os.symlink(ZONES + o.tz, tmp)
             os.replace(tmp, link)
-            print('time zone %s' % o.tz)
+            say('time zone %s' % o.tz)
     if o.region and not re.fullmatch(r'[A-Z]{2}|[0-9]{3}', o.region):
-        print('region %s: not a region code' % o.region)
+        say('region %s: not a region code' % o.region)
         o.region = ''
     if o.region or o.clock:
         p = os.path.join(R, PREFS)
@@ -56,12 +81,12 @@ def main():
             langs[0] = '-'.join(lang + [o.region])
             prefs['AppleLanguages'] = langs
             prefs['AppleLocale'] = '_'.join(lang + [o.region])
-            print('region %s (%s, %s)' % (o.region, prefs['AppleLocale'], langs[0]))
+            say('region %s (%s, %s)' % (o.region, prefs['AppleLocale'], langs[0]))
         if o.clock:
             h24 = o.clock == '24'
             prefs.pop('AppleICUForce12HourTime' if h24 else 'AppleICUForce24HourTime', None)
             prefs['AppleICUForce24HourTime' if h24 else 'AppleICUForce12HourTime'] = True
-            print('%s-hour clock' % o.clock)
+            say('%s-hour clock' % o.clock)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         tmp = p + '.asoft'
         with open(tmp, 'wb') as f:
