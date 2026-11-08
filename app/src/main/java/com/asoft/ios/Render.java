@@ -22,6 +22,9 @@ final class Render {
     /** A memfd of @size for iOS 26's frames (QEMU's ASOFT_FRAME_FD), inherited by the next spawn(); its fd, or -1. */
     static native int createFrameMemory(long size);
 
+    /** @len bytes of iOS 26's frame memory from @off into @out; bytes read, -1 before a start. */
+    static native int readFrame(long off, byte[] out, int len);
+
     /** Starts @argv with @envp (K=V), output to @log, keeping the guest RAM fd; the pid, or -1. */
     static native int spawn(String[] argv, String[] envp, String log);
 

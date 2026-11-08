@@ -1335,25 +1335,22 @@ final class Guest {
      * home screen (hundreds), as the PC installer tells them by the size of a screendump.
      */
     static int frameVariety() {
-        int fd = frameFd26;
-        if (fd < 0) {
+        if (frameFd26 < 0) {
             return -1;
         }
+        // (pread on the memfd: /proc/self/fd/N of a memfd does not open for an app)
         int w = fb26W, h = fb26H;
-        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile("/proc/self/fd/" + fd, "r")) {
-            java.util.HashSet<Integer> seen = new java.util.HashSet<>();
-            byte[] row = new byte[w * 4];
-            for (int y = 0; y < h; y += 7) {
-                f.seek((long) y * w * 4);
-                f.readFully(row);
-                for (int x = 0; x < w; x += 7) {
-                    seen.add((row[x * 4] & 0xf0) << 8 | (row[x * 4 + 1] & 0xf0) << 4 | (row[x * 4 + 2] & 0xf0));
-                }
+        java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+        byte[] row = new byte[w * 4];
+        for (int y = 0; y < h; y += 7) {
+            if (Render.readFrame((long) y * w * 4, row, row.length) != row.length) {
+                return -1;
             }
-            return seen.size();
-        } catch (IOException e) {
-            return -1;
+            for (int x = 0; x < w; x += 7) {
+                seen.add((row[x * 4] & 0xf0) << 8 | (row[x * 4 + 1] & 0xf0) << 4 | (row[x * 4 + 2] & 0xf0));
+            }
         }
+        return seen.size();
     }
 
     static File consoleSocket(Context c) {
