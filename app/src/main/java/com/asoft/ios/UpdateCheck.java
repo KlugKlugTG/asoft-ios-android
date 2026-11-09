@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
 /**
  * Is a newer release out? One read-only GET of the public GitHub API, no sign-in, at the app's
  * start and then at most every 6 hours while its process lives. Nothing is downloaded: the home
- * screen only says so and links to the release page. A switch under More turns it off.
+ * screen only says so and links to the release page. A switch in the home screen's Settings turns it off.
  */
 final class UpdateCheck {
     static final String RELEASE_PAGE = "https://github.com/alpersamur3/asoft-ios-android/releases/latest";

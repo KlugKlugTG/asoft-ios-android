@@ -77,7 +77,7 @@ final class GpuCheck {
 
     /*
      * Below these (MemoryInfo.totalMem; an "8 GB" phone reports ~7.3-7.6 GB) Set up warns that Android may close
-     * iOS and points to a smaller guest memory under More (Guest.ramMiB); it does not refuse. The guest's RAM
+     * iOS and points to a smaller guest memory in their menu on the home screen (Guest.ramMiB); it does not refuse. The guest's RAM
      * (iOS 26 4 GiB by default on a 12 GB phone, the watch 3 GiB) plus QEMU, Turnip and reims (~1.5 GB on the
      * S25) plus Android itself; estimates, not measured on such phones (2026-11-09).
      */
@@ -90,7 +90,7 @@ final class GpuCheck {
             return "";
         }
         return String.format(Locale.ROOT, "This phone has %.1f GB of RAM: Android may close iOS 26%s while it runs. "
-                + "A smaller memory for them under More (iOS 26: 3 GB, watchOS: 2 GB) leaves Android more.",
+                + "A smaller memory for them (their menu on the home screen; iOS 26: 3 GB, watchOS: 2 GB) leaves Android more.",
                 r / 1e9, r < RAM_WATCH ? " and watchOS" : "");
     }
 

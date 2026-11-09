@@ -3,13 +3,19 @@ package com.asoft.ios;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -21,27 +27,36 @@ import java.nio.file.Files;
 import java.util.List;
 
 /**
- * The home screen: iOS 16's state on this phone and the one thing to do next (set up, start,
- * open), with the rest under More. The engine test stays there for comparing phones.
+ * The home screen: the devices on this phone. Each system (iOS 26, iOS 16, watchOS) is its device, drawn with
+ * what its screen last showed (DeviceView), its state in a line, and the one thing to do next as its button;
+ * what is rarely needed (a boot without the save, its screen and memory, erasing it) is behind its "more"
+ * corner. Under the devices the few settings of the app itself, and the engine test for comparing phones.
  */
 public class MainActivity extends Activity {
+    private static final int BG = Color.BLACK, LINE = 0xff26262a, TEXT = 0xfff5f5f7, DIM = 0xff8e8e93, FAINT = 0xff636366,
+            LINK = 0xff6cb2ff, RED = 0xffff5a50, GREEN = 0xff32d74b, ORANGE = 0xffff9f0a;
+
+    /** One system's panel. */
+    private final class Panel {
+        final int os;
+        LinearLayout root;
+        DeviceView device;
+        View dot;
+        TextView status, detail, primary, secondary, back, menu;
+        /** The picture on the device, and the file's time it was read at. */
+        Bitmap shot;
+        long shotTime;
+
+        Panel(int os) {
+            this.os = os;
+        }
+    }
+
     private LinearLayout box;
-    private TextView state, saveInfo, engineLog;
-    private Button primary;
-    /** iOS 26's card, beside iOS 16's: shown when its files are on the phone (or, debug builds, why not). */
-    private LinearLayout card26;
-    private TextView state26, info26;
-    private Button primary26;
-    /** watchOS's card (WatchProfile): shown when its files are on the phone. */
-    private LinearLayout cardWatch;
-    private TextView stateWatch, infoWatch;
-    private Button primaryWatch;
-    private LinearLayout more, running;
-    private TextView freeRam, powerWarn, scale26Row, ram26Row, ramWatchRow, watchBootRow, watchEraseRow;
-    private LinearLayout updateBar;
-    private TextView updateText, updateRow;
-    /** Each card's "Go back to the save of …": the quick save kept after a Turn off (Guest.wayBack). */
-    private Button back16, back26, backWatch;
+    private final Panel p26 = new Panel(Guest.IOS26), p16 = new Panel(Guest.IOS16), pWatch = new Panel(Guest.WATCH);
+    private TextView powerWarn, freeRamValue, wadbValue, updateValue, footer, engineLog;
+    private LinearLayout updateBar, advanced;
+    private TextView updateText;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -65,7 +80,7 @@ public class MainActivity extends Activity {
         public void run() {
             File f = new File(getExternalFilesDir(null), EngineService.LOG);
             try {
-                if (f.exists()) {
+                if (f.exists() && engineLog.getVisibility() == View.VISIBLE && advanced.getVisibility() == View.VISIBLE) {
                     String[] lines = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).split("\n");
                     int from = Math.max(0, lines.length - 30);
                     engineLog.setText(String.join("\n", java.util.Arrays.copyOfRange(lines, from, lines.length)));
@@ -76,60 +91,224 @@ public class MainActivity extends Activity {
             engineLog.postDelayed(this, 1000);
         }
     };
+    /**
+     * While this screen shows: the panels follow what runs (a start, a turn off, a setup), and the settings rows
+     * the pairing (WadbPairService). Only a change draws the panels again: their saves come from qemu-img.
+     */
+    private String shown = "";
+    private final Runnable follow = new Runnable() {
+        @Override
+        public void run() {
+            String now = Guest.running() + " " + Guest.state + " " + Guest.os(MainActivity.this) + " " + Guest.saving() + " "
+                    + SetupService.busy() + " " + Guest.startError;
+            if (!now.equals(shown)) {
+                shown = now;
+                refresh();
+            } else {
+                showSettings();
+            }
+            footer.postDelayed(this, 1500);
+        }
+    };
 
-    private TextView text(LinearLayout to, String s, float size, int color) {
+    // -- the pieces the screen is built from
+
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    /** The surface of a panel or a group: a little lighter at its top, a hairline around it. */
+    private GradientDrawable surface(float radiusDp) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xff19191c, 0xff111113});
+        g.setCornerRadius(dp(radiusDp));
+        g.setStroke(Math.max(1, dp(0.75f)), LINE);
+        return g;
+    }
+
+    private GradientDrawable round(int color, float radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        return g;
+    }
+
+    private TextView text(LinearLayout to, String s, float sp, int color) {
         TextView t = new TextView(this);
         t.setText(s);
-        t.setTextSize(size);
+        t.setTextSize(sp);
         t.setTextColor(color);
         to.addView(t);
         return t;
     }
 
-    /** A rounded group, as iOS's Settings draws one; @top: space above it. */
-    private LinearLayout group(LinearLayout to, int top) {
-        LinearLayout g = new LinearLayout(this);
-        g.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xff1c1c1e);
-        bg.setCornerRadius(36);
-        g.setBackground(bg);
-        g.setClipToOutline(true);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.topMargin = top;
-        to.addView(g, lp);
-        return g;
+    private static LinearLayout.LayoutParams top(LinearLayout.LayoutParams lp, int px) {
+        lp.topMargin = px;
+        return lp;
     }
 
-    /** A row in a group: a thin line above it unless it is the first. */
-    private TextView row(LinearLayout group, String label, int color, View.OnClickListener l) {
-        if (group.getChildCount() > 0) {
-            View line = new View(this);
-            line.setBackgroundColor(0xff38383a);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 2);
-            lp.leftMargin = 48;
-            group.addView(line, lp);
-        }
+    private static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+
+    /** A panel's one main action: a light capsule, or (@outline) only its edge, for what is not there yet. */
+    private TextView capsule(String s, View.OnClickListener l) {
         TextView t = new TextView(this);
-        t.setText(label);
-        t.setTextSize(16);
-        t.setTextColor(color);
-        t.setPadding(48, 40, 48, 40);
-        android.util.TypedValue tv = new android.util.TypedValue();
-        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
-        t.setBackgroundResource(tv.resourceId);
+        t.setText(s);
+        t.setTextSize(15);
+        t.setTypeface(MEDIUM);
+        t.setGravity(Gravity.CENTER);
+        t.setMinHeight(dp(38));
+        t.setMinWidth(dp(92));
+        t.setPadding(dp(20), dp(8), dp(20), dp(8));
         t.setOnClickListener(l);
-        group.addView(t);
         return t;
     }
 
-    private Button button(LinearLayout to, String s, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(s);
-        b.setAllCaps(false);
-        b.setOnClickListener(l);
-        to.addView(b);
-        return b;
+    private void fill(TextView capsule, boolean outline) {
+        GradientDrawable g = round(outline ? Color.TRANSPARENT : TEXT, 19);
+        if (outline) {
+            g.setStroke(dp(1.2f), 0xff6e6e73);
+        }
+        capsule.setTextColor(outline ? TEXT : 0xff0b0b0d);
+        capsule.setBackground(new RippleDrawable(ColorStateList.valueOf(outline ? 0x30ffffff : 0x30000000), g, round(Color.WHITE, 19)));
+    }
+
+    private TextView link(String s, int color, View.OnClickListener l) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(14.5f);
+        t.setTextColor(color);
+        t.setPadding(dp(14), dp(9), dp(8), dp(9));
+        t.setBackground(new RippleDrawable(ColorStateList.valueOf(0x28ffffff), null, round(Color.WHITE, 14)));
+        t.setOnClickListener(l);
+        return t;
+    }
+
+    private LinearLayout buildPanel(Panel c, String name, int kind, int[] tint) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setGravity(Gravity.CENTER_VERTICAL);
+        root.setPadding(dp(18), dp(18), dp(12), dp(18));
+        root.setBackground(surface(26));
+        c.root = root;
+
+        c.device = new DeviceView(this, kind, tint);
+        c.device.setOnClickListener(v -> primaryAction(c.os));
+        root.addView(c.device, new LinearLayout.LayoutParams(dp(80), dp(kind == DeviceView.WATCH ? 132 : 164)));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -2, 1f);
+        clp.leftMargin = dp(18);
+        root.addView(col, clp);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = text(head, name, 21, TEXT);
+        title.setTypeface(MEDIUM);
+        title.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        c.menu = new TextView(this);
+        c.menu.setText("⋯");        // the "more" corner
+        c.menu.setTextSize(22);
+        c.menu.setTextColor(DIM);
+        c.menu.setGravity(Gravity.CENTER);
+        c.menu.setContentDescription("More for " + name);
+        c.menu.setBackground(new RippleDrawable(ColorStateList.valueOf(0x30ffffff), null, round(Color.WHITE, 20)));
+        c.menu.setOnClickListener(v -> showMenu(c));
+        head.addView(c.menu, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        col.addView(head);
+
+        LinearLayout st = new LinearLayout(this);
+        st.setOrientation(LinearLayout.HORIZONTAL);
+        st.setGravity(Gravity.CENTER_VERTICAL);
+        c.dot = new View(this);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(dp(8), dp(8));
+        dlp.rightMargin = dp(8);
+        st.addView(c.dot, dlp);
+        c.status = text(st, "", 14.5f, DIM);
+        LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(-1, -2);
+        stlp.rightMargin = dp(8);
+        col.addView(st, stlp);
+
+        c.detail = text(col, "", 12.5f, DIM);
+        c.detail.setLineSpacing(dp(1.5f), 1f);
+        LinearLayout.LayoutParams dtl = top(new LinearLayout.LayoutParams(-1, -2), dp(8));
+        dtl.rightMargin = dp(8);
+        c.detail.setLayoutParams(dtl);
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        c.primary = capsule("", v -> primaryAction(c.os));
+        actions.addView(c.primary, new LinearLayout.LayoutParams(-2, -2));
+        c.secondary = link("Turn off", RED, v -> askTurnOff());
+        c.secondary.setVisibility(View.GONE);
+        actions.addView(c.secondary, new LinearLayout.LayoutParams(-2, -2));
+        col.addView(actions, top(new LinearLayout.LayoutParams(-1, -2), dp(14)));
+
+        c.back = link("", LINK, v -> goBack(c.os, (Guest.Snap) v.getTag()));
+        c.back.setTextSize(13.5f);
+        c.back.setPadding(0, dp(10), dp(8), dp(2));
+        c.back.setVisibility(View.GONE);
+        col.addView(c.back, new LinearLayout.LayoutParams(-2, -2));
+        return root;
+    }
+
+    /** A rounded group of rows. */
+    private LinearLayout group(LinearLayout to, int topPx) {
+        LinearLayout g = new LinearLayout(this);
+        g.setOrientation(LinearLayout.VERTICAL);
+        g.setBackground(surface(22));
+        g.setClipToOutline(true);
+        to.addView(g, top(new LinearLayout.LayoutParams(-1, -2), topPx));
+        return g;
+    }
+
+    /** A row in a group: its name on the left, its value (the returned view) on the right; a thin line above all but the first. */
+    private TextView row(LinearLayout group, String label, View.OnClickListener l) {
+        if (group.getChildCount() > 0) {
+            View line = new View(this);
+            line.setBackgroundColor(LINE);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Math.max(1, dp(0.75f)));
+            lp.leftMargin = dp(18);
+            group.addView(line, lp);
+        }
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.setPadding(dp(18), dp(14), dp(16), dp(14));
+        r.setMinimumHeight(dp(54));
+        android.util.TypedValue tv = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        r.setBackgroundResource(tv.resourceId);
+        r.setOnClickListener(l);
+        TextView name = text(r, label, 16, TEXT);
+        name.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView value = text(r, "", 15, DIM);
+        value.setGravity(Gravity.END);
+        value.setMaxWidth(dp(170));
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(-2, -2);
+        vlp.leftMargin = dp(12);
+        value.setLayoutParams(vlp);
+        TextView chevron = text(r, "›", 19, FAINT);
+        chevron.setPadding(dp(8), 0, 0, dp(2));
+        group.addView(r);
+        return value;
+    }
+
+    private void heading(LinearLayout to, String s) {
+        TextView t = text(to, s, 13, DIM);
+        t.setTypeface(MEDIUM);
+        t.setPadding(dp(18), dp(30), dp(18), dp(10));
+    }
+
+    private TextView banner(int bg, int color) {
+        TextView t = new TextView(this);
+        t.setTextSize(14);
+        t.setTextColor(color);
+        t.setLineSpacing(dp(1.5f), 1f);
+        t.setPadding(dp(16), dp(12), dp(16), dp(12));
+        t.setBackground(round(bg, 18));
+        return t;
     }
 
     @Override
@@ -137,221 +316,90 @@ public class MainActivity extends Activity {
         super.onCreate(saved);
         DevNight.apply(this);
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.BLACK);
+        scroll.setBackgroundColor(BG);
         scroll.setFitsSystemWindows(true);
+        scroll.setVerticalScrollBarEnabled(false);
         box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(56, 96, 56, 56);
+        box.setPadding(dp(16), dp(20), dp(16), dp(28));
         scroll.addView(box);
         setContentView(scroll);
 
-        TextView title = text(box, "ASoftware iOS", 30, Color.WHITE);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        text(box, (Guest.available26(this) ? "iOS 16 and iOS 26" : "iOS 16")
-                + (WatchProfile.available(this) ? ", and watchOS," : "") + " on this phone", 16, 0xff9a9a9a)
-                .setPadding(0, 0, 0, 48);
+        // the logo's iPhone and the name
+        LinearLayout brand = new LinearLayout(this);
+        brand.setOrientation(LinearLayout.HORIZONTAL);
+        brand.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_launcher_foreground);
+        logo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        brand.addView(logo, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(names, "ASoftware", 25, TEXT);
+        title.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        title.setLetterSpacing(-0.01f);
+        text(names, "iPhone and Apple Watch software, on this phone", 13, DIM);
+        brand.addView(names);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.leftMargin = -dp(8);
+        blp.bottomMargin = dp(18);
+        box.addView(brand, blp);
 
         addUpdateBar();
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(48, 40, 48, 40);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xff1c1c1e);
-        bg.setCornerRadius(36);
-        card.setBackground(bg);
-        state = text(card, "", 18, Color.WHITE);
-        saveInfo = text(card, "", 14, 0xff9a9a9a);
-        saveInfo.setPadding(0, 12, 0, 24);
-        primary = button(card, "", v -> primaryAction());
-        primary.setTextSize(18);
-        back16 = backButton(card, Guest.IOS16);
-        box.addView(card);
-
-        card26 = new LinearLayout(this);
-        card26.setOrientation(LinearLayout.VERTICAL);
-        card26.setPadding(48, 40, 48, 40);
-        GradientDrawable bg26 = new GradientDrawable();
-        bg26.setColor(0xff1c1c1e);
-        bg26.setCornerRadius(36);
-        card26.setBackground(bg26);
-        state26 = text(card26, "", 18, Color.WHITE);
-        info26 = text(card26, "", 14, 0xff9a9a9a);
-        info26.setPadding(0, 12, 0, 24);
-        primary26 = button(card26, "", v -> primary26Action());
-        primary26.setTextSize(18);
-        back26 = backButton(card26, Guest.IOS26);
-        LinearLayout.LayoutParams c26 = new LinearLayout.LayoutParams(-1, -2);
-        c26.topMargin = 24;
-        box.addView(card26, c26);
-
-        cardWatch = new LinearLayout(this);
-        cardWatch.setOrientation(LinearLayout.VERTICAL);
-        cardWatch.setPadding(48, 40, 48, 40);
-        GradientDrawable bgW = new GradientDrawable();
-        bgW.setColor(0xff1c1c1e);
-        bgW.setCornerRadius(36);
-        cardWatch.setBackground(bgW);
-        stateWatch = text(cardWatch, "", 18, Color.WHITE);
-        infoWatch = text(cardWatch, "", 14, 0xff9a9a9a);
-        infoWatch.setPadding(0, 12, 0, 24);
-        primaryWatch = button(cardWatch, "", v -> {
-            if (WatchProfile.available(this)) {
-                open(Guest.WATCH);
-            }
-        });
-        primaryWatch.setTextSize(18);
-        backWatch = backButton(cardWatch, Guest.WATCH);
-        LinearLayout.LayoutParams cW = new LinearLayout.LayoutParams(-1, -2);
-        cW.topMargin = 24;
-        box.addView(cardWatch, cW);
-
         // power saving slows iOS several times over: say so above everything else
-        powerWarn = new TextView(this);
-        powerWarn.setTextSize(15);
-        powerWarn.setTextColor(0xffff9f0a);
-        powerWarn.setPadding(48, 36, 48, 36);
-        GradientDrawable warnBg = new GradientDrawable();
-        warnBg.setColor(0xff2c2210);
-        warnBg.setCornerRadius(36);
-        powerWarn.setBackground(warnBg);
+        powerWarn = banner(0xff241b0b, ORANGE);
         powerWarn.setOnClickListener(v -> PowerCheck.openSettings(this));
         LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(-1, -2);
-        wlp.topMargin = 24;
+        wlp.bottomMargin = dp(12);
         box.addView(powerWarn, wlp);
         powerWarn.setVisibility(View.GONE);
 
-        Button moreButton = button(box, "More", null);
-        moreButton.setBackgroundColor(Color.TRANSPARENT);
-        moreButton.setTextColor(0xff0a84ff);
-        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
-        mlp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
-        mlp.topMargin = 16;
-        moreButton.setLayoutParams(mlp);
-        more = new LinearLayout(this);
-        more.setOrientation(LinearLayout.VERTICAL);
-        more.setVisibility(View.GONE);
-        box.addView(more);
-        moreButton.setOnClickListener(v -> {
-            boolean open = more.getVisibility() != View.VISIBLE;
-            more.setVisibility(open ? View.VISIBLE : View.GONE);
-            moreButton.setText(open ? "Less" : "More");
-        });
+        box.addView(buildPanel(p26, "iOS 26", DeviceView.ISLAND, new int[] {0xff5a9bff, 0xff4a5df0, 0xff5b36cf}),
+                new LinearLayout.LayoutParams(-1, -2));
+        box.addView(buildPanel(p16, "iOS 16", DeviceView.HOME, new int[] {0xff5ad1c8, 0xff2f8fe0, 0xff3a56c9}),
+                top(new LinearLayout.LayoutParams(-1, -2), dp(12)));
+        box.addView(buildPanel(pWatch, "watchOS", DeviceView.WATCH, null), top(new LinearLayout.LayoutParams(-1, -2), dp(12)));
 
-        running = group(more, 16);
-        row(running, "Turn off (no save)", 0xffff453a, v -> new Thread(() -> {
-            // the quick save's time for the text (from QEMU: off the UI thread)
-            Guest.Snap quick = Guest.newestQuick(Guest.snapshots(this));
-            runOnUiThread(() -> {
-                if (isFinishing()) {
-                    return;
-                }
-                new AlertDialog.Builder(this)
-                        .setTitle("Turn off " + (Guest.os(this) == Guest.WATCH ? "watchOS" : "iOS") + "?")
-                        .setMessage(ScreenActivity.turnOffText(Guest.os(this), quick))
-                        .setPositiveButton("Turn off", (d, w) -> {
-                            if (Guest.running()) {
-                                GuestService.powerOff(this);
-                                state.setText("Turning iOS off…");
-                                state.postDelayed(this::refreshUntilOff, 2000);
-                            }
-                        })
-                        .setNegativeButton("Cancel", null)
-                        .show();
-            });
-        }, "turn-off-ask").start());
-        LinearLayout ios = group(more, 16);
-        freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
-        updateRow = row(ios, "", Color.WHITE, v -> {
+        heading(box, "Settings");
+        LinearLayout settings = group(box, 0);
+        freeRamValue = row(settings, "Free memory for iOS", v -> toggleFreeRam());
+        wadbValue = row(settings, "Wireless debugging", v -> wirelessDebugging());
+        ((View) wadbValue.getParent()).setVisibility(WirelessAdb.supported() ? View.VISIBLE : View.GONE);
+        updateValue = row(settings, "Check for updates", v -> {
             UpdateCheck.setEnabled(this, !UpdateCheck.enabled(this));
             showUpdate();
             UpdateCheck.check(this, this::showUpdate);
         });
-        row(ios, "Set up: iOS 16, iOS 26 and watchOS (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
-        row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
-            if (!Guest.running()) {
-                Guest.select(this, Guest.IOS16);
-                GuestService.startCold(this);
-            }
-            startActivity(new Intent(this, ScreenActivity.class));
-        }));
-        row(ios, "Boot iOS 26, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
-            if (!Guest.running()) {
-                Guest.select(this, Guest.IOS26);
-                GuestService.startCold(this);
-            }
-            startActivity(new Intent(this, ScreenActivity.class));
-        }));
-        scale26Row = row(ios, "", Color.WHITE, v -> chooseScale26());
-        ram26Row = row(ios, "", Color.WHITE, v -> chooseRam(Guest.IOS26));
-        ramWatchRow = row(ios, "", Color.WHITE, v -> chooseRam(Guest.WATCH));
-        watchBootRow = row(ios, "Boot watchOS, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
-            if (!Guest.running()) {
-                Guest.select(this, Guest.WATCH);
-                GuestService.startCold(this);
-            }
-            startActivity(new Intent(this, ScreenActivity.class));
-        }));
-        watchEraseRow = row(ios, "Erase watchOS's watch", 0xffff453a, v -> new AlertDialog.Builder(this)
-                .setTitle("Erase watchOS's watch?")
-                .setMessage("The watch's settings, faces and saves go; it starts as it came. watchOS itself stays.")
-                .setPositiveButton("Erase", (d, w) -> {
-                    if (Guest.running()) {
-                        Toast.makeText(this, "Close it first", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Guest.select(this, Guest.WATCH);
-                        Guest.erase(this, Guest.WATCH);
-                        refresh();
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show());
-        row(ios, "Erase iOS 26's iPhone", 0xffff453a, v -> new AlertDialog.Builder(this)
-                .setTitle("Erase iOS 26's iPhone?")
-                .setMessage("iOS 26's settings, apps and saves go; it starts as new. iOS 26 itself stays.")
-                .setPositiveButton("Erase", (d, w) -> {
-                    if (Guest.running()) {
-                        Toast.makeText(this, "Close iOS first", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Guest.select(this, Guest.IOS26);
-                        Guest.erase(this, Guest.IOS26);
-                        refresh();
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show());
-        row(ios, "Erase iPhone", 0xffff453a, v -> new AlertDialog.Builder(this)
-                .setTitle("Erase iPhone?")
-                .setMessage("Settings, installed apps and saves go; iOS starts as new. The iOS you set up stays.")
-                .setPositiveButton("Erase", (d, w) -> {
-                    if (Guest.running()) {
-                        Toast.makeText(this, "Close iOS first (side bar > Saves > Save and close)", Toast.LENGTH_SHORT).show();
-                    } else {
-                        Guest.select(this, Guest.IOS16);
-                        Guest.erase(this, Guest.IOS16);
-                        refresh();
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show());
-        LinearLayout engine = group(more, 40);
-        row(engine, "Engine test", 0xff0a84ff, v -> {
+        row(settings, "Set up or add a system", v -> startActivity(new Intent(this, SetupActivity.class)));
+        row(settings, "Engine test", v -> advanced.setVisibility(advanced.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+
+        advanced = new LinearLayout(this);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        advanced.setVisibility(View.GONE);
+        advanced.setPadding(dp(4), dp(12), dp(4), 0);
+        box.addView(advanced);
+        text(advanced, "Runs iOS-style code on this phone's CPU the way iOS 16 does here, and reports its speed: "
+                + "useful when trying another phone.", 13, DIM).setPadding(dp(14), 0, dp(14), dp(12));
+        TextView run = capsule("Run the engine test", v -> {
             EngineService.start(this, 2, 2, 120);
             engineLog.setVisibility(View.VISIBLE);
         });
-        TextView about = text(more, "Runs iOS-style code on this phone's CPU the way iOS 16 does here, and reports "
-                + "its speed: useful when trying another phone.", 13, 0xff8a8a8a);
-        about.setPadding(48, 16, 48, 16);
-        engineLog = text(more, "", 11, 0xffcfcfcf);
+        fill(run, true);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+        rlp.leftMargin = dp(14);
+        advanced.addView(run, rlp);
+        engineLog = text(advanced, "", 11, 0xffcfcfcf);
         engineLog.setTypeface(Typeface.MONOSPACE);
         engineLog.setTextIsSelectable(true);
-        engineLog.setPadding(36, 28, 36, 28);
-        GradientDrawable logBg = new GradientDrawable();
-        logBg.setColor(0xff111113);
-        logBg.setCornerRadius(24);
-        engineLog.setBackground(logBg);
+        engineLog.setPadding(dp(12), dp(10), dp(12), dp(10));
+        engineLog.setBackground(round(0xff111113, 12));
+        engineLog.setLayoutParams(top(new LinearLayout.LayoutParams(-1, -2), dp(12)));
         engineLog.setVisibility(new File(getExternalFilesDir(null), EngineService.LOG).exists() ? View.VISIBLE : View.GONE);
         engineLog.post(engineRefresh);
+
+        footer = text(box, "", 12.5f, FAINT);
+        footer.setGravity(Gravity.CENTER);
+        footer.setLayoutParams(top(new LinearLayout.LayoutParams(-1, -2), dp(26)));
 
         if (saved == null && !Guest.available(this) && !Guest.available26(this)) {
             startActivity(new Intent(this, SetupActivity.class));   // first start: set up first
@@ -367,42 +415,46 @@ public class MainActivity extends Activity {
         } else {
             registerReceiver(powerChanged, f);
         }
-        refresh();
+        shown = "";
+        follow.run();
         showUpdate();
         UpdateCheck.check(this, this::showUpdate);
         powerWarn.postDelayed(powerRecheck, 3_000);
     }
 
+    @Override
+    protected void onPause() {
+        unregisterReceiver(powerChanged);
+        powerWarn.removeCallbacks(powerRecheck);
+        footer.removeCallbacks(follow);
+        super.onPause();
+    }
+
     /** The notice that a newer release is out, hidden until the check says so. */
     private void addUpdateBar() {
         updateBar = new LinearLayout(this);
-        updateBar.setOrientation(LinearLayout.VERTICAL);
-        updateBar.setPadding(48, 36, 48, 20);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xff10243a);
-        bg.setCornerRadius(36);
-        updateBar.setBackground(bg);
-        updateText = text(updateBar, "", 15, 0xff64b5ff);
-        updateText.setPadding(0, 0, 0, 12);
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        button(buttons, "Release page", v -> {
+        updateBar.setOrientation(LinearLayout.HORIZONTAL);
+        updateBar.setGravity(Gravity.CENTER_VERTICAL);
+        updateBar.setPadding(dp(16), dp(6), dp(6), dp(6));
+        updateBar.setBackground(round(0xff0f2136, 18));
+        updateText = text(updateBar, "", 14, 0xff8cc4ff);
+        updateText.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        updateBar.addView(link("Get it", 0xff8cc4ff, v -> {
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateCheck.RELEASE_PAGE)));
             } catch (android.content.ActivityNotFoundException e) {
                 Toast.makeText(this, UpdateCheck.RELEASE_PAGE, Toast.LENGTH_LONG).show();
             }
-        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        button(buttons, "Dismiss", v -> {
+        }));
+        updateBar.addView(link("Dismiss", 0xff5f84ad, v -> {
             String tag = UpdateCheck.toShow(this);
             if (tag != null) {
                 UpdateCheck.dismiss(this, tag);
             }
             showUpdate();
-        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        updateBar.addView(buttons);
+        }));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = 24;
+        lp.bottomMargin = dp(12);
         box.addView(updateBar, lp);
         updateBar.setVisibility(View.GONE);
     }
@@ -411,16 +463,9 @@ public class MainActivity extends Activity {
         String tag = UpdateCheck.toShow(this);
         updateBar.setVisibility(tag == null ? View.GONE : View.VISIBLE);
         if (tag != null) {
-            updateText.setText(tag + " is out. This app is " + UpdateCheck.version(this) + ".");
+            updateText.setText(tag + " is out (this is " + UpdateCheck.version(this) + ")");
         }
-        updateRow.setText("Check for updates: " + (UpdateCheck.enabled(this) ? "On" : "Off"));
-    }
-
-    @Override
-    protected void onPause() {
-        unregisterReceiver(powerChanged);
-        powerWarn.removeCallbacks(powerRecheck);
-        super.onPause();
+        updateValue.setText(UpdateCheck.enabled(this) ? "On" : "Off");
     }
 
     private void showPowerWarning() {
@@ -450,38 +495,139 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void primaryAction() {
-        if (!Guest.available(this) || SetupService.busy()) {
+    // -- a panel's button and its "more" corner
+
+    private static String systemName(int os) {
+        return os == Guest.WATCH ? "watchOS" : os == Guest.IOS26 ? "iOS 26" : "iOS 16";
+    }
+
+    private boolean installed(int os) {
+        return os == Guest.WATCH ? WatchProfile.available(this) : os == Guest.IOS26 ? Guest.available26(this) : Guest.available(this);
+    }
+
+    private void primaryAction(int os) {
+        if (os == Guest.IOS16 && (!Guest.available(this) || SetupService.busy())) {
             startActivity(new Intent(this, SetupActivity.class));
-        } else {
-            open(Guest.IOS16);
-        }
-    }
-
-    private void primary26Action() {
-        if (Guest.available26(this)) {
-            open(Guest.IOS26);
-        } else {
+        } else if (os == Guest.IOS26 && !Guest.available26(this)) {
             startActivity(new Intent(this, SetupActivity.class).putExtra(SetupActivity.EXTRA_IOS26, true));  // Setup26Screen
+        } else if (installed(os)) {
+            open(os);
         }
     }
 
-    /** A card's "Go back to the save of …" (hidden until the card's refresh finds a way back). */
-    private Button backButton(LinearLayout card, int os) {
-        Button b = button(card, "", v -> goBack(os, (Guest.Snap) v.getTag()));
-        b.setBackgroundColor(Color.TRANSPARENT);
-        b.setTextColor(0xff0a84ff);
-        b.setTextSize(15);
-        b.setVisibility(View.GONE);
-        return b;
+    /** What is rarely needed for one system: a boot without its save, its screen and memory, erasing it. */
+    private void showMenu(Panel c) {
+        int os = c.os;
+        if (!installed(os)) {
+            return;
+        }
+        PopupMenu m = new PopupMenu(this, c.menu, Gravity.END);
+        boolean up = Guest.running() && Guest.os(this) == os;
+        if (!up) {
+            m.getMenu().add(0, 1, 0, "Boot, not from the save");
+        }
+        if (os == Guest.IOS26) {
+            m.getMenu().add(0, 2, 0, "Screen: " + (Guest.scale26(this) == 2 ? "2x (faster)" : "3x (sharp)"));
+        }
+        if (os != Guest.IOS16) {
+            m.getMenu().add(0, 3, 0, "Memory: " + Guest.ramMiB(this, os) / 1024 + " GB");
+        }
+        m.getMenu().add(0, 4, 0, os == Guest.WATCH ? "Erase the watch…" : "Erase the iPhone…");
+        m.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: bootCold(os); break;
+                case 2: chooseScale26(); break;
+                case 3: chooseRam(os); break;
+                default: askErase(os);
+            }
+            return true;
+        });
+        m.show();
     }
 
-    /** Shows @b for the way back @snap (null: hides it), with its size and @hw, what it opens with. On the UI thread. */
-    private static void showBack(Button b, Guest.Snap snap, String hw) {
-        b.setTag(snap);
-        b.setVisibility(snap == null ? View.GONE : View.VISIBLE);
+    private void bootCold(int os) {
+        if (Guest.running() && Guest.os(this) != os) {
+            open(os);       // says to close the other one first
+            return;
+        }
+        whenPowerOk(() -> {
+            if (!Guest.running()) {
+                Guest.select(this, os);
+                GuestService.startCold(this);
+            }
+            startActivity(new Intent(this, ScreenActivity.class));
+        });
+    }
+
+    private void askErase(int os) {
+        boolean watch = os == Guest.WATCH;
+        String what = watch ? "watchOS's watch" : os == Guest.IOS26 ? "iOS 26's iPhone" : "iOS 16's iPhone";
+        new AlertDialog.Builder(this)
+                .setTitle("Erase " + what + "?")
+                .setMessage(watch ? "The watch's settings, faces and saves go; it starts as it came. watchOS itself stays."
+                        : "Its settings, installed apps and saves go; iOS starts as new. " + systemName(os) + " itself stays.")
+                .setPositiveButton("Erase", (d, w) -> {
+                    if (Guest.running()) {
+                        Toast.makeText(this, "Close " + Guest.osName(Guest.os(this)) + " first (side bar > Saves > Save and close)",
+                                Toast.LENGTH_LONG).show();
+                    } else {
+                        Guest.select(this, os);
+                        Guest.erase(this, os);
+                        shown = "";
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void askTurnOff() {
+        new Thread(() -> {
+            // the quick save's time for the text (from QEMU: off the UI thread)
+            Guest.Snap quick = Guest.newestQuick(Guest.snapshots(this));
+            runOnUiThread(() -> {
+                if (isFinishing() || !Guest.running()) {
+                    return;
+                }
+                int os = Guest.os(this);
+                new AlertDialog.Builder(this)
+                        .setTitle("Turn off " + (os == Guest.WATCH ? "watchOS" : "iOS") + "?")
+                        .setMessage(ScreenActivity.turnOffText(os, quick))
+                        .setPositiveButton("Turn off", (d, w) -> {
+                            if (Guest.running()) {
+                                GuestService.powerOff(this);
+                            }
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+        }, "turn-off-ask").start();
+    }
+
+    /** "today 23:00", "yesterday 23:00" or "9 Nov, 23:00" of a save's "2026-11-09 23:00:51". */
+    static String nice(String date) {
+        try {
+            java.time.LocalDateTime t = java.time.LocalDateTime.parse(date.substring(0, 16).replace(' ', 'T'));
+            java.time.LocalDate today = java.time.LocalDate.now();
+            String time = String.format(java.util.Locale.ROOT, "%02d:%02d", t.getHour(), t.getMinute());
+            if (t.toLocalDate().equals(today)) {
+                return "today " + time;
+            }
+            if (t.toLocalDate().equals(today.minusDays(1))) {
+                return "yesterday " + time;
+            }
+            return t.getDayOfMonth() + " " + t.getMonth().getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.ENGLISH) + ", " + time;
+        } catch (RuntimeException e) {
+            return date.length() >= 16 ? date.substring(5, 16) : date;
+        }
+    }
+
+    /** Shows @c's way back @snap (null: hides it). */
+    private static void showBack(Panel c, Guest.Snap snap) {
+        c.back.setTag(snap);
+        c.back.setVisibility(snap == null ? View.GONE : View.VISIBLE);
         if (snap != null) {
-            b.setText("Go back to the save of " + ScreenActivity.when(snap) + "\n" + snap.size.replace(" ", "") + " · " + hw);
+            c.back.setText("Go back to the save of " + nice(snap.date));
         }
     }
 
@@ -515,7 +661,7 @@ public class MainActivity extends Activity {
             String other = Guest.osName(Guest.os(this));
             new AlertDialog.Builder(this)
                     .setTitle(other + " is running")
-                    .setMessage("One at a time: close " + other + " first (\uD83D\uDCBE > Save and close, or Turn off).")
+                    .setMessage("One at a time: close " + other + " first (side bar > Saves > Save and close, or Turn off).")
                     .setPositiveButton("Open " + other, (d, w) -> startActivity(new Intent(this, ScreenActivity.class)))
                     .setNegativeButton("Cancel", null)
                     .show();
@@ -549,15 +695,11 @@ public class MainActivity extends Activity {
                         + "back finds the other one as you left it.")
                 .setPositiveButton(other == 2 ? "Use 2x" : "Use 3x", (d, w) -> {
                     Guest.setScale26(this, other);
+                    shown = "";
                     refresh();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
-    }
-
-    private String ramRowText(int os) {
-        return (os == Guest.WATCH ? "watchOS's memory: " : "iOS 26's memory: ") + Guest.ramMiB(this, os) / 1024 + " GB"
-                + (Guest.ramMiB(this, os) == Guest.ramDefault(this, os) ? " (default for this phone)" : "");
     }
 
     /**
@@ -586,6 +728,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Use", (d, w) -> {
                     Runnable use = () -> {
                         Guest.setRamMiB(this, os, ch[chosen[0]]);
+                        shown = "";
                         refresh();
                         if (ch[chosen[0]] != now) {
                             noteRamChange(os);
@@ -643,229 +786,401 @@ public class MainActivity extends Activity {
         }, "ram-change-note").start();
     }
 
-    /** iOS 26's card: hidden in a release build until its files are on the phone. */
+    // -- the panels' states
+
+    private static final int OFF = 0, READY = 1, STARTING = 2, RUNNING = 3;
+
+    /** The panel's line: @how colours its dot (none for a system that is not there). */
+    private void state(Panel c, int how, String s) {
+        c.status.setText(s);
+        c.status.setTextColor(how == RUNNING ? GREEN : how == STARTING ? ORANGE : DIM);
+        c.dot.setVisibility(how == OFF ? View.GONE : View.VISIBLE);
+        c.dot.setBackground(round(how == RUNNING ? GREEN : how == STARTING ? ORANGE : 0xff48484a, 4));
+    }
+
+    private static void detail(Panel c, String s) {
+        c.detail.setText(s);
+        c.detail.setVisibility(s.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** The panel's button: @primary, filled for a system that is there; "Turn off" beside it while it is @up. */
+    private void buttons(Panel c, String primary, boolean up) {
+        boolean there = installed(c.os);
+        c.primary.setText(primary);
+        fill(c.primary, !there);
+        c.secondary.setVisibility(up ? View.VISIBLE : View.GONE);
+        c.menu.setVisibility(there ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    /** The device's picture: what its screen last showed, read again when the file changed. Not on the UI thread. */
+    private Bitmap shot(Panel c) {
+        File f = Guest.thumbFile(this, c.os);
+        long t = f.lastModified();
+        if (t == 0) {
+            c.shotTime = 0;
+            return null;
+        }
+        if (t != c.shotTime || c.shot == null) {
+            Bitmap b = BitmapFactory.decodeFile(f.getPath());
+            if (b != null) {
+                c.shot = b;
+                c.shotTime = t;
+            }
+        }
+        return c.shot;
+    }
+
+    private static Guest.Snap quickOf(List<Guest.Snap> list) {
+        Guest.Snap quick = null;
+        for (Guest.Snap s : list) {
+            if (Guest.isQuick(s.tag)) {
+                quick = s;
+            }
+        }
+        return quick;
+    }
+
+    private String error(int os, boolean up) {
+        String err = Guest.startError;
+        return !up && err != null && Guest.selected(this) == os ? "Did not start: " + err + "\n" : "";
+    }
+
+    /** @os is on its way up: the step before its QEMU runs (Guest.prepare), or QEMU loads its save. */
+    private boolean starting(int os) {
+        return "preparing".equals(Guest.state) && Guest.selected(this) == os
+                || Guest.running() && Guest.os(this) == os && "resuming".equals(Guest.state);
+    }
+
+    /** iOS 26's panel: shown without its files too (its button leads to Set up, which installs it from Apple). */
     private void refresh26() {
+        Panel c = p26;
         boolean debug = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         String missing = Guest.missing26(this);
-        // (shown without its files too: its button leads to Set up, which installs it from Apple)
-        card26.setVisibility(View.VISIBLE);
         boolean twoX = Guest.scale26(this) == 2;
-        if (scale26Row != null) {
-            scale26Row.setText("iOS 26's screen: " + (twoX ? "2x (faster)" : "3x (sharp)"));
-            scale26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
-        }
-        if (ram26Row != null) {
-            ram26Row.setText(ramRowText(Guest.IOS26));
-            ram26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
-        }
         boolean up = Guest.running() && Guest.os(this) == Guest.IOS26;
         if (missing != null) {
             boolean busy = SetupService.busy() && "a26".equals(SetupService.state.target);
-            state26.setText(busy ? "iOS 26 / watchOS are being set up" : "iOS 26 is not on this phone");
-            info26.setText(busy ? SetupService.state.text
-                    : "Set up downloads it from Apple (about 10 GB) and builds it on this phone, after a check of its GPU."
-                    + (debug ? " (No " + new File(Guest.dir26(this), missing) + ".)" : ""));
-            primary26.setText(busy ? "Open Set up" : "Set up iOS 26 or watchOS");
-            primary26.setVisibility(View.VISIBLE);
+            state(c, busy ? STARTING : OFF, busy ? "Being set up" : "Not installed");
+            detail(c, busy ? SetupService.state.text : "Downloads about 10 GB from Apple and builds it on this phone."
+                    + (debug ? " (No " + new File(Guest.dir26(this), missing).getName() + ".)" : ""));
+            buttons(c, busy ? "Show" : "Set up", false);
+            showBack(c, null);
+            c.device.show(null, false, false);
             return;
         }
-        primary26.setVisibility(View.VISIBLE);
-        state26.setText(up ? "iOS 26 is running" : "iOS 26 is ready");
-        primary26.setText(up ? "Open iOS 26" : "Start iOS 26");
-        info26.setText("On the phone's GPU.");
+        if ("preparing".equals(Guest.state) && Guest.selected(this) == Guest.IOS26) {
+            String what = Guest.preparing;
+            state(c, STARTING, "Starting…");
+            detail(c, what == null ? "" : what);
+            buttons(c, "Open", false);
+            showBack(c, null);
+            return;
+        }
+        boolean starting = starting(Guest.IOS26);
+        state(c, starting ? STARTING : up ? RUNNING : READY, starting ? "Starting…" : up ? "Running" : "Ready");
+        buttons(c, up ? "Open" : "Start", up);
         new Thread(() -> {
             List<Guest.Snap> list = up || Guest.userDisk(this, Guest.IOS26).exists()
                     ? Guest.snapshots(this, Guest.IOS26) : java.util.Collections.emptyList();
-            Guest.Snap quick = null;
-            for (Guest.Snap s : list) {
-                if (Guest.isQuick(s.tag)) {
-                    quick = s;
-                }
-            }
+            Guest.Snap quick = quickOf(list);
             Guest.Snap back = !up && Guest.isWayBack(this, Guest.IOS26, quick) ? quick : null;
-            String hw = back == null ? "" : Guest.hardware(this, Guest.IOS26, back.tag);
-            String info;
+            String st, info;
             if (up) {
-                info = "On the phone's GPU. " + list.size() + (list.size() == 1 ? " save" : " saves");
+                st = starting ? "Starting…" : "Running";
+                info = "";
             } else if (back != null) {
-                info = (Guest.otherHardware(this, Guest.IOS26, back.tag) ? "The memory setting changed: the next start "
-                        + "boots with " + Guest.ramMiB(this, Guest.IOS26) / 1024 + " GB" : "Turned off: the next start boots")
-                        + " (about 3 minutes, then about 15 minutes of iOS's own start-up work). Its last save stays as a "
-                        + "way back.";
+                st = "Turned off";
+                info = (Guest.otherHardware(this, Guest.IOS26, back.tag) ? "Boots with " + Guest.ramMiB(this, Guest.IOS26) / 1024
+                        + " GB next time" : "Boots next time") + ": about 3 min, then slow for about 15 min while iOS finishes starting.";
             } else if (quick != null) {
                 // the last close, or an automatic save (AutoSave: settled after a boot, or before a crash)
-                info = "Goes on from its last save (" + quick.date.substring(5, 16) + ").";
+                st = "Ready";
+                info = "Continues from " + nice(quick.date) + ".";
             } else {
                 // measured 2026-11-05 (APK-PLAN §6.20): every vCPU busy for ~13 min after a boot, idle after ~15
-                info = "On the phone's GPU. Starts with a boot: about 3 minutes to the lock screen on our phone, then "
-                        + "about 15 minutes of iOS's own start-up work, slow until it ends. Save and close keeps iOS past it.";
+                st = "Ready";
+                info = "Starts with a boot: about 3 min, then slow for about 15 min while iOS finishes starting.";
             }
-            String err = Guest.startError;
-            String text = (!up && err != null && Guest.selected(this) == Guest.IOS26 ? "Did not start: " + err + "\n\n" : "")
-                    + info + (twoX ? " Screen 2x." : "");
+            String text = (error(Guest.IOS26, up) + info).trim();
+            String statusText = st + (twoX && !up ? "  ·  2x screen" : "");
+            Bitmap shot = shot(c);
             runOnUiThread(() -> {
-                info26.setText(text);
-                showBack(back26, back, hw);
+                state(c, starting ? STARTING : up ? RUNNING : READY, statusText);
+                detail(c, text);
+                showBack(c, back);
+                c.device.show(shot, true, up);
             });
         }, "home-refresh26").start();
     }
 
-    /** watchOS's card: only when its files are on the phone (WatchProfile.dir), in every build. */
+    /** watchOS's panel: only when its files are on the phone (WatchProfile.dir), in every build. */
     private void refreshWatch() {
+        Panel c = pWatch;
         boolean have = WatchProfile.available(this);
-        cardWatch.setVisibility(have ? View.VISIBLE : View.GONE);
-        watchBootRow.setVisibility(have ? View.VISIBLE : View.GONE);
-        watchEraseRow.setVisibility(have ? View.VISIBLE : View.GONE);
-        ramWatchRow.setText(ramRowText(Guest.WATCH));
-        ramWatchRow.setVisibility(have ? View.VISIBLE : View.GONE);
+        c.root.setVisibility(have ? View.VISIBLE : View.GONE);
         if (!have) {
             return;
         }
         boolean up = Guest.running() && Guest.os(this) == Guest.WATCH;
-        stateWatch.setText(up ? "watchOS is running" : "watchOS 27.2 is ready");
-        primaryWatch.setText(up ? "Open watchOS" : "Start watchOS");
-        infoWatch.setText("Apple Watch Series 9 on the phone's GPU.");
+        boolean starting = starting(Guest.WATCH);
+        state(c, starting ? STARTING : up ? RUNNING : READY, starting ? "Starting…" : up ? "Running" : "Ready");
+        buttons(c, up ? "Open" : "Start", up);
         new Thread(() -> {
             List<Guest.Snap> list = up || Guest.userDisk(this, Guest.WATCH).exists()
                     ? Guest.snapshots(this, Guest.WATCH) : java.util.Collections.emptyList();
-            Guest.Snap quick = null;
-            for (Guest.Snap s : list) {
-                if (Guest.isQuick(s.tag)) {
-                    quick = s;
-                }
-            }
+            Guest.Snap quick = quickOf(list);
             Guest.Snap back = !up && Guest.isWayBack(this, Guest.WATCH, quick) ? quick : null;
-            String hw = back == null ? "" : Guest.hardware(this, Guest.WATCH, back.tag);
-            String info;
+            String st, info;
             if (up) {
-                info = "Apple Watch Series 9 on the phone's GPU. " + list.size() + (list.size() == 1 ? " save" : " saves");
+                st = starting ? "Starting…" : "Running";
+                info = "";
             } else if (back != null) {
-                info = (Guest.otherHardware(this, Guest.WATCH, back.tag) ? "The memory setting changed: the next start "
-                        + "boots with " + Guest.ramMiB(this, Guest.WATCH) / 1024 + " GB" : "Turned off: the next start boots")
-                        + " (about 5 to 7 minutes to the watch face). Its last save stays as a way back.";
+                st = "Turned off";
+                info = (Guest.otherHardware(this, Guest.WATCH, back.tag) ? "Boots with " + Guest.ramMiB(this, Guest.WATCH) / 1024
+                        + " GB next time" : "Boots next time") + ": 5 to 7 min to the watch face.";
             } else if (quick != null) {
-                info = "Goes on from its last save (" + quick.date.substring(5, 16) + ").";
+                st = "Ready";
+                info = "Continues from " + nice(quick.date) + ".";
             } else {
                 // measured 2026-11-07 (WATCHOS.md §2k): the face 5-7 minutes after a boot on our phone
-                info = "Apple Watch Series 9 on the phone's GPU. Starts with a boot: about 5 to 7 minutes to the "
-                        + "watch face on our phone. The crown and the side button are under its screen.";
+                st = "Ready";
+                info = "Starts with a boot: 5 to 7 min to the watch face.";
             }
-            String err = Guest.startError;
-            String text = (!up && err != null && Guest.selected(this) == Guest.WATCH ? "Did not start: " + err + "\n\n" : "")
-                    + info;
+            String text = (error(Guest.WATCH, up) + info).trim();
+            Bitmap shot = shot(c);
             runOnUiThread(() -> {
-                infoWatch.setText(text);
-                showBack(backWatch, back, hw);
+                state(c, starting ? STARTING : up ? RUNNING : READY, st);
+                detail(c, text);
+                showBack(c, back);
+                c.device.show(shot, true, up);
             });
         }, "home-refresh-watch").start();
     }
 
-    private void showFreeRam() {
-        if (!MemoryCleaner.supported()) {
-            freeRam.setText("Free memory while iOS runs: not on Android 14 and later (Android lets an app close only its own processes)");
-            freeRam.setTextColor(0xff8a8a8a);
-        } else {
-            freeRam.setText("Free memory while iOS runs: " + (MemoryCleaner.enabled(this) ? "On" : "Off"));
+    private void refresh16() {
+        Panel c = p16;
+        boolean up = Guest.running() && Guest.os(this) == Guest.IOS16;
+        // the setup from Apple runs (its last step starts iOS once, in the background): the panel follows it
+        if (SetupService.busy() && !"a26".equals(SetupService.state.target)) {
+            state(c, STARTING, "Being installed");
+            detail(c, SetupService.state.text);
+            buttons(c, "Show", false);
+            c.menu.setVisibility(View.INVISIBLE);
+            showBack(c, null);
+            c.device.show(null, false, false);
+            return;
         }
+        if (!Guest.available(this)) {
+            state(c, OFF, "Not installed");
+            detail(c, "Installs from Apple's servers on this phone (about 1.5 hours), or comes from your PC.");
+            buttons(c, "Set up", false);
+            showBack(c, null);
+            c.device.show(null, false, false);
+            return;
+        }
+        boolean starting = starting(Guest.IOS16);
+        state(c, starting ? STARTING : up ? RUNNING : READY, starting ? "Starting…" : up ? "Running" : "Ready");
+        buttons(c, up ? "Open" : "Start", up);
+        new Thread(() -> {
+            List<Guest.Snap> list = up || Guest.userDisk(this, Guest.IOS16).exists()
+                    ? Guest.snapshots(this, Guest.IOS16) : java.util.Collections.emptyList();
+            Guest.Snap quick = quickOf(list);
+            Guest.Snap back = !up && Guest.isWayBack(this, Guest.IOS16, quick) ? quick : null;
+            String st, info;
+            if (up) {
+                st = starting ? "Starting…" : "Running";
+                info = "";
+            } else if (back != null) {
+                st = "Turned off";
+                info = "Boots next time: 2 to 4 min.";
+            } else if (quick != null) {
+                st = "Ready";
+                info = "Continues from " + nice(quick.date) + ".";
+            } else {
+                st = "Ready";
+                info = "Starts with a boot: 2 to 4 min.";
+            }
+            int named = list.size() - (quick != null ? 1 : 0);
+            if (!up && named > 0) {
+                info += " " + named + " named save" + (named == 1 ? "" : "s") + ".";
+            }
+            if (!Guest.nativeMissing().isEmpty()) {
+                info += " This phone's CPU runs iOS in emulation only, much slower (it lacks ARMv8.2's " + Guest.nativeMissing() + ").";
+            }
+            String text = (error(Guest.IOS16, up) + info).trim();
+            Bitmap shot = shot(c);
+            runOnUiThread(() -> {
+                state(c, starting ? STARTING : up ? RUNNING : READY, st);
+                detail(c, text);
+                showBack(c, back);
+                c.device.show(shot, true, up);
+            });
+        }, "home-refresh").start();
+    }
+
+    // -- the app's settings
+
+    private void showSettings() {
+        boolean can = MemoryCleaner.supported(this);
+        freeRamValue.setText(can ? MemoryCleaner.enabled(this) ? "On" : "Off" : "Pair first");
+        String pairing = WadbPairService.state;
+        wadbValue.setText(pairing != null ? "Pairing…" : !WirelessAdb.paired(this) ? "Not paired"
+                : WirelessAdb.refused(this) ? "Pair again" : WirelessAdb.connected() ? "Connected"
+                : WirelessAdb.switchedOn(this) == 0 ? "Paired, off now" : "Paired");
     }
 
     private void toggleFreeRam() {
-        if (!MemoryCleaner.supported()) {
+        if (!MemoryCleaner.supported(this)) {
+            wirelessDebugging();    // Android 14 and later: only through a pairing
             return;
         }
         if (MemoryCleaner.enabled(this)) {
             MemoryCleaner.setEnabled(this, false);
-            showFreeRam();
+            showSettings();
             return;
         }
         new AlertDialog.Builder(this)
                 .setTitle("Free memory while iOS runs?")
                 .setMessage("While iOS runs, and only then, this app ends the background processes of your other apps "
-                        + "every 90 s, as Android does itself when memory runs short. iOS needs 4 to 5 GB, and a save "
+                        + "every 90 s, as Android does itself when memory runs short. iOS needs 4 to 8 GB, and a save "
                         + "3 GB more; without the room Android may close this app, iOS with it.\n\n"
                         + "Your other apps are not force-stopped: their alarms and notifications stay. But an app "
                         + "you left in the background starts again from its first screen when you open it, and "
                         + "music or a call keeps running only if it shows a notification.")
                 .setPositiveButton("Turn on", (d, w) -> {
                     MemoryCleaner.setEnabled(this, true);
-                    showFreeRam();
+                    showSettings();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void refreshUntilOff() {
-        if (Guest.running() || Guest.saving()) {
-            state.setText("Turning iOS off…");
-            state.postDelayed(this::refreshUntilOff, 2000);
+    /**
+     * The pairing with this phone's Wireless debugging (WirelessAdb): what it is for and how it goes, or, once
+     * paired, how it stands, a test and the way out.
+     */
+    private void wirelessDebugging() {
+        if (!WirelessAdb.supported()) {
+            return;
+        }
+        if (WadbPairService.running()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Pairing")
+                    .setMessage(WadbPairService.state)
+                    .setPositiveButton("Open Developer options", (d, w) -> openDeveloperOptions())
+                    .setNegativeButton("Close", null)
+                    .show();
+            return;
+        }
+        if (WirelessAdb.paired(this) && !WirelessAdb.refused(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Wireless debugging")
+                    .setMessage(WirelessAdb.status(this) + ".\n\nWhile iOS runs, the app asks Android through it to end the "
+                            + "background processes of other apps (Free memory while iOS runs).\n\nAfter a restart of the phone "
+                            + "Wireless debugging is off until you turn it on again (Developer options, on Wi-Fi); the pairing stays.")
+                    .setPositiveButton("Test now", (d, w) -> testWirelessAdb())
+                    .setNeutralButton("Unpair", (d, w) -> {
+                        WirelessAdb.unpair(this);
+                        showSettings();
+                        Toast.makeText(this, "Unpaired. Settings still lists the key under Wireless debugging > Paired devices: "
+                                + "remove it there too.", Toast.LENGTH_LONG).show();
+                    })
+                    .setNegativeButton("Close", null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Pair with Wireless debugging")
+                .setMessage("Android 14 and later let an app end only its own background processes. Paired with this phone's "
+                        + "Wireless debugging, the app can ask Android to end those of your other apps while iOS runs, so "
+                        + "Android does not close iOS for lack of memory.\n\n"
+                        + "1. Tap Pair: Developer options open.\n"
+                        + "2. Wireless debugging (needs Wi-Fi): on, then \"Pair device with pairing code\".\n"
+                        + "3. A notification of this app asks for the six digits: type them there, without leaving that screen.\n\n"
+                        + "Only this app, on this phone, uses the pairing. After a restart of the phone Wireless debugging is "
+                        + "off until you turn it on again.")
+                .setPositiveButton("Pair", (d, w) -> startPairing())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void startPairing() {
+        // the code goes into a notification: Android 13 and later ask the user for those first
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 7);
+            return;
+        }
+        WadbPairService.start(this);
+        showSettings();
+        openDeveloperOptions();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code != 7) {
+            return;
+        }
+        if (results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            startPairing();
         } else {
-            refresh();
+            Toast.makeText(this, "The pairing code is typed into a notification of this app: allow its notifications first.",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
-    /** What iOS is doing, and the saves (those come from qemu-img or QEMU: off the UI thread). */
+    private void openDeveloperOptions() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Developer options are off: Settings > About phone > Software information, tap Build number "
+                    + "seven times, then open Developer options.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** One "am kill-all" through the pairing, with the memory before and after. */
+    private void testWirelessAdb() {
+        Toast.makeText(this, "Asking Android…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            android.app.ActivityManager am = getSystemService(android.app.ActivityManager.class);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            long before = mi.availMem >> 20;
+            String said;
+            try {
+                WirelessAdb.shell(this, "am kill-all", 30_000);
+                Thread.sleep(1500);
+                am.getMemoryInfo(mi);
+                said = "It works: available memory " + before + " MB before, " + (mi.availMem >> 20) + " MB after.";
+            } catch (IOException e) {
+                said = "It did not work: " + (WirelessAdb.lastError != null ? WirelessAdb.lastError : e.getMessage()) + ".";
+            } catch (InterruptedException e) {
+                return;
+            }
+            AppLog.note(this, "wireless adb test: " + said);
+            String text = said;
+            runOnUiThread(() -> {
+                showSettings();
+                if (!isFinishing()) {
+                    new AlertDialog.Builder(this).setTitle("Wireless debugging").setMessage(text).setPositiveButton("OK", null).show();
+                }
+            });
+        }, "wadb-test").start();
+    }
+
+    /** What each system is doing, and the saves (those come from qemu-img or QEMU: off the UI thread). */
     private void refresh() {
-        running.setVisibility(Guest.running() ? View.VISIBLE : View.GONE);
         refresh26();
         refreshWatch();
-        boolean up = Guest.running() && Guest.os(this) == Guest.IOS16;
-        showFreeRam();
+        refresh16();
+        if (Guest.turningOff()) {
+            Panel c = Guest.os(this) == Guest.WATCH ? pWatch : Guest.os(this) == Guest.IOS26 ? p26 : p16;
+            state(c, STARTING, "Turning off…");
+        }
+        showSettings();
         showPowerWarning();
-        // the setup from Apple runs (its last step starts iOS once, in the background): the card follows it
-        if (SetupService.busy()) {
-            state.setText("Installing iOS 16");
-            saveInfo.setText(SetupService.state.text);
-            primary.setText("Show the install");
-            return;
-        }
-        if (!Guest.available(this)) {
-            state.setText("iOS 16 is not set up");
-            saveInfo.setText("Set up installs it on this phone from Apple's servers (about 1.5 hours, no PC), or brings it from "
-                    + "your PC (Send-ToPhone.cmd).");
-            primary.setText("Set up");
-            return;
-        }
-        state.setText(up ? "iOS is running" : "iOS 16 is ready");
-        primary.setText(up ? "Open iOS" : "Start iOS 16");
-        saveInfo.setText(String.format(java.util.Locale.ROOT, "%.1f GB free on this phone", getFilesDir().getUsableSpace() / 1e9));
-        new Thread(() -> {
-            List<Guest.Snap> list = up || Guest.userDisk(this, Guest.IOS16).exists()
-                    ? Guest.snapshots(this, Guest.IOS16) : java.util.Collections.emptyList();
-            Guest.Snap quick = null;
-            for (Guest.Snap s : list) {
-                if (Guest.isQuick(s.tag)) {
-                    quick = s;
-                }
-            }
-            long free = getFilesDir().getUsableSpace();
-            Guest.Snap back = !up && Guest.isWayBack(this, Guest.IOS16, quick) ? quick : null;
-            String hw = back == null ? "" : Guest.hardware(this, Guest.IOS16, back.tag);
-            String info;
-            if (up) {
-                info = list.size() + (list.size() == 1 ? " save" : " saves");
-            } else if (back != null) {
-                info = "Turned off: the next start boots (2 to 4 minutes on our phone). Its last save stays as a way back.";
-            } else if (quick != null) {
-                info = "Goes on from where you closed it (" + quick.date.substring(5, 16) + "), in about 10 s.";
-            } else if (Guest.userDisk(this, Guest.IOS16).exists()) {
-                info = "Starts with a boot: a few minutes (2 to 4 on our phone).";
-            } else {
-                info = "First start: a few minutes (2 to 4 on our phone).";
-            }
-            if (!up && list.size() > (quick != null ? 1 : 0)) {
-                info += " " + (list.size() - (quick != null ? 1 : 0)) + " named save(s) under the side bar's Saves.";
-            }
-            if (!Guest.nativeMissing().isEmpty()) {
-                info += " This phone's CPU runs iOS in emulation only, much slower (it lacks ARMv8.2's "
-                        + Guest.nativeMissing() + ").";
-            }
-            String err = Guest.startError;
-            String text = (!up && err != null && Guest.selected(this) == Guest.IOS16 ? "Did not start: " + err + "\n\n" : "")
-                    + info + String.format(java.util.Locale.ROOT, "\n%.1f GB free on this phone.", free / 1e9);
-            runOnUiThread(() -> {
-                saveInfo.setText(text);
-                showBack(back16, back, hw);
-            });
-        }, "home-refresh").start();
+        footer.setText(String.format(java.util.Locale.ROOT, "ASoftware iOS %s  ·  %.1f GB free on this phone",
+                UpdateCheck.version(this), getFilesDir().getUsableSpace() / 1e9));
     }
 }

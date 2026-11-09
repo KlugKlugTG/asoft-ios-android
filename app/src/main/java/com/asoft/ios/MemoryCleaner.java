@@ -13,12 +13,16 @@ import java.util.Set;
 
 /**
  * "Free memory while iOS runs": every 90 s, while iOS runs and only then, the background processes
- * of the phone's other apps are ended the way Android ends them when memory runs short
- * (ActivityManager.killBackgroundProcesses): not a force stop, so their alarms, jobs and
- * notifications stay, but an app left in the background starts afresh when opened. iOS needs
- * 4 to 5 GB, and a save writes 3 GB more, which Android otherwise answers by ending this app.
+ * of the phone's other apps are ended the way Android ends them when memory runs short: not a force
+ * stop, so their alarms, jobs and notifications stay, but an app left in the background starts afresh
+ * when opened. iOS needs 4 to 8 GB, and a save writes 3 GB more, which Android otherwise answers by
+ * ending this app.
  *
- * Android 14 and later let an app end only its own processes: there the option is off.
+ * Android 13 and older: ActivityManager.killBackgroundProcesses, for the apps a person starts. Android 14
+ * and later let an app end only its own processes: there the app asks adb's shell on this phone for
+ * "am kill-all" (every cached process; nothing in the foreground, so not this app, its QEMU or its
+ * services), which works once the user has paired the app with Wireless debugging (WirelessAdb). With a
+ * pairing the same is used on older Androids too.
  */
 final class MemoryCleaner {
     private static final String PREFS = "asoft", KEY = "free_ram";
@@ -27,12 +31,13 @@ final class MemoryCleaner {
 
     private MemoryCleaner() {}
 
-    static boolean supported() {
-        return Build.VERSION.SDK_INT < 34;
+    /** Without a pairing (WirelessAdb) only up to Android 13. */
+    static boolean supported(Context c) {
+        return Build.VERSION.SDK_INT < 34 || WirelessAdb.paired(c);
     }
 
     static boolean enabled(Context c) {
-        return supported() && prefs(c).getBoolean(KEY, false);
+        return supported(c) && prefs(c).getBoolean(KEY, false);
     }
 
     static void setEnabled(Context c, boolean on) {
@@ -106,9 +111,31 @@ final class MemoryCleaner {
         return mi.availMem >> 20;
     }
 
+    /** The last round's failure through adb, said once in the log until it changes. */
+    private static String adbSaid;
+
     private static void round(Context c) {
         ActivityManager am = c.getSystemService(ActivityManager.class);
         long before = availableMb(am);
+        if (WirelessAdb.paired(c)) {
+            try {
+                WirelessAdb.shell(c, "am kill-all", 30_000);
+                sleep(1500);
+                adbSaid = null;
+                AppLog.note(c, "free memory: am kill-all through wireless adb, available " + before + " -> "
+                        + availableMb(am) + " MB");
+                return;
+            } catch (java.io.IOException e) {
+                String why = String.valueOf(e.getMessage());
+                if (!why.equals(adbSaid)) {
+                    adbSaid = why;
+                    AppLog.note(c, "free memory: wireless adb: " + why);
+                }
+                if (Build.VERSION.SDK_INT >= 34) {
+                    return;     // nothing else an app may do here
+                }
+            }
+        }
         Set<String> apps = others(c);
         for (String p : apps) {
             try {

@@ -393,6 +393,14 @@ final class Guest {
         return forOs == IOS26 && scale26(c) == 2 ? "ios26-2x-user" : "ios" + forOs + "-user";
     }
 
+    /**
+     * A small picture of @forOs's screen as it last looked (ScreenActivity.keepThumb writes it), for the home
+     * screen's device (DeviceView): beside the user disk, one per disk.
+     */
+    static File thumbFile(Context c, int forOs) {
+        return new File(c.getFilesDir(), diskName(c, forOs) + ".thumb.jpg");
+    }
+
     /** What sits next to the user disk for one save: "ios16-user.<tag>.leds" and the like. */
     private static String userPrefix(Context c) {
         return diskName(c, os(c)) + ".";
@@ -400,7 +408,7 @@ final class Guest {
 
     /**
      * iOS 26's screen scale, 3 (1179x2556, an iPhone's own) or 2 (786x1704: the same 393x852 points with
-     * 2.25 times fewer pixels to draw). Chosen under More. Unchosen it is 2, except where iOS 26 already ran at 3
+     * 2.25 times fewer pixels to draw). Chosen in iOS 26's menu on the home screen. Unchosen it is 2, except where iOS 26 already ran at 3
      * before 2 became the default: that disk holds its apps and saves.
      */
     static int scale26(Context c) {
@@ -416,7 +424,7 @@ final class Guest {
     }
 
     /**
-     * The guest's RAM in MiB, per OS, chosen under More (iOS 26 3, 4 or 6 GiB; the watch 2 or 3 GiB). Unchosen:
+     * The guest's RAM in MiB, per OS, chosen in its menu on the home screen (iOS 26 3, 4 or 6 GiB; the watch 2 or 3 GiB). Unchosen:
      * 4 / 3 GiB (the trees' own) on a phone with ~12 GB, 3 / 2 GiB on a smaller one (2 GiB slowed the watch's
      * cold Settings from 5.5 to 27 s but left ~1.3 GB more to Android, WATCHOS.md). A save always loads with
      * the RAM it was made with (savedRam), so a new size takes effect at the next full start.
@@ -477,7 +485,7 @@ final class Guest {
     }
 
     /**
-     * Save @tag of @forOs was made with other hardware than a boot gets now (the memory under More changed since):
+     * Save @tag of @forOs was made with other hardware than a boot gets now (the memory setting changed since):
      * its quick save is then a way back, not the next start (the start boots with the setting). A Go back to such a
      * save accepts its size (keptRamKey), so that run's own later quick saves resume as usual, until the memory
      * setting changes again.
@@ -987,7 +995,7 @@ final class Guest {
     }
 
     /**
-     * Before a start that wants the quick save: one made with other hardware (the memory under More changed since)
+     * Before a start that wants the quick save: one made with other hardware (the memory setting changed since)
      * becomes a way back and the start boots with the setting (goBack opens it).
      */
     private static String quickWithOtherHardware(Context c, int forOs, String loadTag) {
@@ -1112,6 +1120,7 @@ final class Guest {
      */
     static void erase(Context c, int forOs) {
         userDisk(c, forOs).delete();
+        thumbFile(c, forOs).delete();
         String prefix = diskName(c, forOs) + ".";
         File[] f = c.getFilesDir().listFiles((d, n) -> n.startsWith(prefix)
                 && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock") || n.endsWith(".ram")
@@ -1411,7 +1420,7 @@ final class Guest {
             // reims' views of iOS's graphics memory take a mapping per 16 KiB page: Android allows an app
             // 65,530 (APK-PLAN §6.19)
             return "its graphics memory used up the 65,530 memory mappings Android gives an app (a known limit"
-                    + " of this version). Start it again; the 2x screen (More) needs fewer.";
+                    + " of this version). Start it again; the 2x screen (iOS 26's menu on the home screen) needs fewer.";
         }
         return why;
     }
@@ -1814,7 +1823,7 @@ final class Guest {
         boolean aod = sb == null && !watch && aodDisk(userDisk(c, IOS26)) && aodFiles(g);
         aodRunning = aod;
         String tree = aod ? DTREE26_AOD : DTREE26;
-        // the RAM: a save's own (it only loads into the size it was made with), else the one chosen under More
+        // the RAM: a save's own (it only loads into the size it was made with), else the one chosen on the home screen
         String dtree, tc;
         if (sb != null) {
             dtree = sb.dtree.getPath();     // the setup's own trees, their own RAM

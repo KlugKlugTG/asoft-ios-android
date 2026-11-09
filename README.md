@@ -27,9 +27,16 @@ Nothing in it is specific to the S25 Ultra; it is the phone it is developed and 
 - Speed is mostly the CPU's big cores: an older or smaller core is slower whatever its ARM version.
 - RAM: iOS 16 reached its lock screen on a 6 GB phone (Galaxy M31) with about 0.2 GB left to Android;
   with less to spare, Android may close it. iOS 26 and watchOS have been run only on a 12 GB phone.
-  Their memory is set under More: iOS 26 3, 4 or 6 GB, watchOS 2 or 3 GB (the smaller by default on a
-  phone under 10 GB). On the S25 Ultra iOS 26 left Android 1.5 GB at 3 GB and 0.8 to 1.0 GB at 6 GB,
-  where the app warns that Android may close it. Less RAM is a warning, not a stop.
+  Their memory is set in their menu on the home screen (the three dots): iOS 26 3, 4 or 6 GB,
+  watchOS 2 or 3 GB (the smaller by default on a phone under 10 GB). On the S25 Ultra iOS 26 left
+  Android 1.5 GB at 3 GB and 0.8 to 1.0 GB at 6 GB, where the app warns that Android may close it.
+  Less RAM is a warning, not a stop.
+- Free memory for iOS (home screen, Settings): while iOS runs, the background processes of other
+  apps are ended every 90 s, so Android does not close iOS for lack of memory. Android 14 and later
+  let an app end only its own, so there the app asks adb's shell on the phone itself (`am kill-all`)
+  over Wireless debugging: pair once (Settings on the home screen > Wireless debugging; the code from
+  Developer options goes into a notification of the app). Wireless debugging needs Wi-Fi and is off
+  again after a restart of the phone until it is turned on.
 
 ## What works
 
@@ -55,8 +62,9 @@ iOS 26.6.2 in Apple's research VM (vphone600), drawing on the phone's GPU: Metal
 Vulkan (reims-vgpu, metal2vulkan) on Mesa's Turnip driver for Adreno. Snapdragon 8 Elite (Adreno 830)
 only so far. Home screen, apps, touch, keyboard, Liquid Glass; quick boot and saves as for iOS 16, and
 an automatic save before Android could run out of memory. It is slow for about 15 minutes after a
-boot. Set up installs it from Apple (below). The screen is 2x by default (faster); 3x (sharp) is under More. On a disk set up with Always On Display, the side button takes iOS to it
-and a touch there wakes it; iOS's own Auto-Lock is set to Never there, because the app cannot
+boot. Set up installs it from Apple (below). The screen is 2x by default (faster); 3x (sharp) is in
+iOS 26's menu on the home screen. On a disk set up with Always On Display, the side button takes iOS
+to it and a touch there wakes it; iOS's own Auto-Lock is set to Never there, because the app cannot
 see iOS go to its Always On Display by itself.
 
 ### watchOS (preview)

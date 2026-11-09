@@ -685,6 +685,66 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         GuestService.save(this);
     }
 
+    private long thumbAt;
+
+    /**
+     * Keeps a small picture of the guest's screen for the home screen's device (Guest.thumbFile): every 20 s
+     * while the picture is live, and when this screen is left (@now). Not while iOS's display is off or in its
+     * Always On Display, and not a boot's black screen: the picture before stays.
+     */
+    private void keepThumb(boolean now) {
+        long up = android.os.SystemClock.uptimeMillis();
+        if (!now && up - thumbAt < 20_000) {
+            return;
+        }
+        if (fbPid == -1 || fbPid != Guest.pid(this) || !attached || displayOff || Guest.aod26 || Guest.saving() || closing
+                || view.getWidth() <= 0 || !view.getHolder().getSurface().isValid()) {
+            return;
+        }
+        thumbAt = up;
+        // the guest's picture inside the surface (guestPoint's rectangle)
+        float vw = view.getWidth(), vh = view.getHeight(), g = (float) Guest.fbW() / Guest.fbH();
+        float w = vw, h = vh;
+        if (vw / vh > g) {
+            w = vh * g;
+        } else {
+            h = vw / g;
+        }
+        android.graphics.Rect from = new android.graphics.Rect(Math.round((vw - w) / 2), Math.round((vh - h) / 2),
+                Math.round((vw + w) / 2), Math.round((vh + h) / 2));
+        int tw = 300, th = Math.max(1, Math.round(300 / g));
+        android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(tw, th, android.graphics.Bitmap.Config.ARGB_8888);
+        java.io.File to = Guest.thumbFile(this, Guest.os(this));
+        try {
+            android.view.PixelCopy.request(view, from, b, result -> {
+                if (result == android.view.PixelCopy.SUCCESS) {
+                    long sum = 0;
+                    for (int y = 4; y < th; y += 16) {
+                        for (int x = 4; x < tw; x += 16) {
+                            int c = b.getPixel(x, y);
+                            sum += (c >> 16 & 0xff) + (c >> 8 & 0xff) + (c & 0xff);
+                        }
+                    }
+                    long n = (long) ((th + 11) / 16) * ((tw + 11) / 16) * 3;
+                    if (n > 0 && sum / n >= 14) {       // not a black screen (a boot, a display just off)
+                        java.io.File tmp = new java.io.File(to.getPath() + ".new");
+                        try (java.io.FileOutputStream o = new java.io.FileOutputStream(tmp)) {
+                            b.compress(android.graphics.Bitmap.CompressFormat.JPEG, 86, o);
+                        } catch (java.io.IOException e) {
+                            tmp.delete();
+                        }
+                        if (tmp.length() > 0) {
+                            tmp.renameTo(to);
+                        }
+                    }
+                }
+                b.recycle();
+            }, render);
+        } catch (IllegalArgumentException e) {
+            b.recycle();    // the surface went away meanwhile
+        }
+    }
+
     /** The guest's display power from QEMU's LED byte (Guest.ledsFile); at most every 100 ms. */
     private void readLeds() {
         int pid = Guest.pid(this);
@@ -750,6 +810,7 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
 
     @Override
     protected void onPause() {
+        keepThumb(true);
         Choreographer.getInstance().removeFrameCallback(this);
         liftFinger();
         Guest.releaseButtons();
@@ -906,6 +967,9 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         if (fbPid == pid && attached) {
             int w = surfW, h = surfH;
             render.post(() -> Render.frame(w, h));
+            if ("running".equals(Guest.state) || "booting".equals(Guest.state)) {
+                keepThumb(false);       // (a boot's black screen is not kept)
+            }
         }
     }
 
