@@ -398,10 +398,15 @@ final class Guest {
 
     /**
      * iOS 26's screen scale, 3 (1179x2556, an iPhone's own) or 2 (786x1704: the same 393x852 points with
-     * 2.25 times fewer pixels to draw). Chosen under More; 3 unless chosen.
+     * 2.25 times fewer pixels to draw). Chosen under More. Unchosen it is 2, except where iOS 26 already ran at 3
+     * before 2 became the default: that disk holds its apps and saves.
      */
     static int scale26(Context c) {
-        return c.getSharedPreferences("guest", Context.MODE_PRIVATE).getInt("ios26-scale", 3) == 2 ? 2 : 3;
+        android.content.SharedPreferences p = c.getSharedPreferences("guest", Context.MODE_PRIVATE);
+        if (p.contains("ios26-scale")) {
+            return p.getInt("ios26-scale", 2) == 2 ? 2 : 3;
+        }
+        return new File(c.getFilesDir(), "ios26-user.qcow2").exists() ? 3 : 2;
     }
 
     static void setScale26(Context c, int scale) {

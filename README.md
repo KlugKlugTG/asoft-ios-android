@@ -55,7 +55,7 @@ iOS 26.6.2 in Apple's research VM (vphone600), drawing on the phone's GPU: Metal
 Vulkan (reims-vgpu, metal2vulkan) on Mesa's Turnip driver for Adreno. Snapdragon 8 Elite (Adreno 830)
 only so far. Home screen, apps, touch, keyboard, Liquid Glass; quick boot and saves as for iOS 16, and
 an automatic save before Android could run out of memory. It is slow for about 15 minutes after a
-boot. Set up installs it from Apple (below). 3x (sharp) or 2x (faster) screen under More. On a disk set up with Always On Display, the side button takes iOS to it
+boot. Set up installs it from Apple (below). The screen is 2x by default (faster); 3x (sharp) is under More. On a disk set up with Always On Display, the side button takes iOS to it
 and a touch there wakes it.
 
 ### watchOS (preview)
