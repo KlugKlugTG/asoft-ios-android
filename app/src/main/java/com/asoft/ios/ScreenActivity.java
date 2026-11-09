@@ -501,7 +501,8 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(48, 16, 48, 0);
         TextView info = new TextView(this);
-        info.setText(gb(free) + " free on the phone; a save takes about 3 GB.\n"
+        boolean big = Guest.os(this) == Guest.IOS26 && Guest.ramMiB(this, Guest.IOS26) > Guest.RAM_TIGHT;
+        info.setText(gb(free) + " free on the phone; a save takes about " + (big ? 5 : 3) + " GB.\n"
                 + (list.isEmpty() ? "No saves yet." : "Tap a save to load or delete it."));
         info.setPadding(0, 0, 0, 16);
         box.addView(info);

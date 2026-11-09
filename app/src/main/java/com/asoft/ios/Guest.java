@@ -409,16 +409,16 @@ final class Guest {
     }
 
     /**
-     * The guest's RAM in MiB, per OS, chosen under More (iOS 26 3 or 4 GiB; the watch 2 or 3 GiB). Unchosen:
+     * The guest's RAM in MiB, per OS, chosen under More (iOS 26 3, 4 or 6 GiB; the watch 2 or 3 GiB). Unchosen:
      * 4 / 3 GiB (the trees' own) on a phone with ~12 GB, 3 / 2 GiB on a smaller one (2 GiB slowed the watch's
      * cold Settings from 5.5 to 27 s but left ~1.3 GB more to Android, WATCHOS.md). A save always loads with
      * the RAM it was made with (savedRam), so a new size takes effect at the next full start.
      */
-    static final int[] RAM_CHOICES_26 = {3072, 4096}, RAM_CHOICES_WATCH = {2048, 3072};
-    // No 6 GB for iOS 26 yet: vresearch's framebuffer sits at 0x1c0000000, inside RAM above 5 GB (RAM starts at
-    // 0x80000000). On Windows reims then refuses the split RAM map and QEMU ends; on the phone it boots (6.0 GiB in
-    // vm_stat, 2026-11-09) but the guest treats the framebuffer's pages as RAM, and power off did not finish in 60 s.
-    // Comes back when QEMU puts the framebuffer past the end of RAM (WIN-LAUNCHER.md).
+    static final int[] RAM_CHOICES_26 = {3072, 4096, 6144}, RAM_CHOICES_WATCH = {2048, 3072};
+    /** Above this Android has so little left that it may close the guest: MainActivity.chooseRam warns. */
+    static final int RAM_TIGHT = 4096;
+    // 6 GB needs qemu-sptm asoft-android 6c733cf or later: from 5 GB of RAM vresearch's framebuffer goes past the end
+    // of RAM. A save made below 5 GB keeps the old address, 0x1c0000000, so it still loads.
 
     static int ramDefault(Context c, int forOs) {
         boolean small = GpuCheck.ram(c) < 10_000_000_000L;
@@ -432,7 +432,7 @@ final class Guest {
                 return mib;
             }
         }
-        return ramDefault(c, forOs);   // a size no longer offered (iOS 26's 6 GB)
+        return ramDefault(c, forOs);   // a size not offered
     }
 
     static void setRamMiB(Context c, int forOs, int mib) {
@@ -977,14 +977,15 @@ final class Guest {
 
     /** iOS runs, writes and saves into the user disk: refuse to start below this much free room. */
     /**
-     * A first save (RAM: ~3.7 / ~3 GB) and room to write; a quick save already in the disk lowers it, since
-     * a save with too little room for two goes over it (saveQuick), down to 2 GB of room to write.
+     * A first save (RAM: ~3.7 / ~3 GB, 5.1 GiB at iOS 26's 6 GB) and room to write; a quick save already in the
+     * disk lowers it, since a save with too little room for two goes over it (saveQuick), down to 2 GB of room to write.
      */
     private static void checkRoom(Context c, int forOs) throws IOException {
         long free = c.getFilesDir().getUsableSpace();
         List<Snap> q = userDisk(c, forOs).exists() ? quickSlots(c, forOs) : new ArrayList<>();
         long quick = q.isEmpty() ? 0 : sizeBytes(q.get(0).size);
-        long need = Math.max(2L << 30, (forOs == WATCH ? WatchProfile.ROOM : (forOs == IOS26 ? 6L : 4L) << 30) - quick);
+        long iphone = (forOs == IOS26 ? (ramMiB(c, forOs) > RAM_TIGHT ? 8L : 6L) : 4L) << 30;
+        long need = Math.max(2L << 30, (forOs == WATCH ? WatchProfile.ROOM : iphone) - quick);
         AppLog.note(c, String.format(java.util.Locale.ROOT, "room: %.1f GB free, user disk %.1f GB, quick save %.1f GB,"
                 + " needs %.1f GB", free / 1e9, userDisk(c, forOs).length() / 1e9, quick / 1e9, need / 1e9));
         if (free < need) {

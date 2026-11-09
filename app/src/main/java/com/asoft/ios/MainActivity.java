@@ -571,7 +571,8 @@ public class MainActivity extends Activity {
         String[] names = new String[ch.length];
         int pick = 0;
         for (int i = 0; i < ch.length; i++) {
-            names[i] = ch[i] / 1024 + " GB" + (ch[i] == def ? " (default for this phone)" : "");
+            names[i] = ch[i] / 1024 + " GB" + (ch[i] == def ? " (default for this phone)"
+                    : ch[i] > Guest.RAM_TIGHT ? " (Android may close iOS)" : "");
             if (ch[i] == now) {
                 pick = i;
             }
@@ -583,13 +584,32 @@ public class MainActivity extends Activity {
                         os == Guest.WATCH ? "watchOS" : "iOS 26", GpuCheck.ram(this) / 1e9))
                 .setSingleChoiceItems(names, pick, (d, w) -> chosen[0] = w)
                 .setPositiveButton("Use", (d, w) -> {
-                    boolean changed = ch[chosen[0]] != now;
-                    Guest.setRamMiB(this, os, ch[chosen[0]]);
-                    refresh();
-                    if (changed) {
-                        noteRamChange(os);
+                    Runnable use = () -> {
+                        Guest.setRamMiB(this, os, ch[chosen[0]]);
+                        refresh();
+                        if (ch[chosen[0]] != now) {
+                            noteRamChange(os);
+                        }
+                    };
+                    if (ch[chosen[0]] > Guest.RAM_TIGHT && ch[chosen[0]] != now) {
+                        warnTightRam(ch[chosen[0]], use);
+                    } else {
+                        use.run();
                     }
                 })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** The guest's RAM is only part of what it costs: QEMU and the GPU's memory come on top. */
+    private void warnTightRam(int mib, Runnable use) {
+        new AlertDialog.Builder(this)
+                .setTitle("Use " + mib / 1024 + " GB?")
+                .setMessage(String.format(java.util.Locale.ROOT, "This phone has %.1f GB, and iOS needs more than the %d GB you give it, "
+                        + "for its graphics and the emulator itself. That leaves Android very little: it may close iOS while it runs, "
+                        + "and whatever was not saved is lost. If that happens, go back to a smaller size.",
+                        GpuCheck.ram(this) / 1e9, mib / 1024))
+                .setPositiveButton("Use " + mib / 1024 + " GB", (d, w) -> use.run())
                 .setNegativeButton("Cancel", null)
                 .show();
     }
