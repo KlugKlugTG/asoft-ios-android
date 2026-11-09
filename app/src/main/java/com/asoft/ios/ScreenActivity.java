@@ -479,16 +479,23 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         }
         new Thread(() -> {
             java.util.List<Guest.Snap> list = Guest.snapshots(this);
+            boolean wayBack = Guest.quickStale(this, Guest.os(this));
             long free = getFilesDir().getUsableSpace();
             runOnUiThread(() -> {
                 if (!isFinishing()) {
-                    showSaves(list, free);
+                    showSaves(list, wayBack, free);
                 }
             });
         }, "saves-list").start();
     }
 
-    private void showSaves(java.util.List<Guest.Snap> list, long free) {
+    /** "11-09 14:36" of a save's date. */
+    static String when(Guest.Snap s) {
+        return s.date.substring(5, 16);
+    }
+
+    /** @wayBack: the quick save is the way back kept after a Turn off (Guest.quickStale). */
+    private void showSaves(java.util.List<Guest.Snap> list, boolean wayBack, long free) {
         boolean up = Guest.running();
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -503,10 +510,17 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
             Button row = new Button(this);
             row.setAllCaps(false);
             row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            row.setText(snap.label() + "\n" + snap.date + " · " + snap.size);
+            int os = Guest.os(this);
+            boolean back = Guest.isQuick(snap.tag) && (wayBack || Guest.otherHardware(this, os, snap.tag));
+            row.setText((back ? "Go back to the save of " + when(snap) : snap.label())
+                    + "\n" + snap.date + " · " + snap.size + " · " + Guest.hardware(this, os, snap.tag));
             row.setOnClickListener(v -> {
                 dialog[0].dismiss();
-                saveActions(snap);
+                if (back) {
+                    askGoBack(snap);
+                } else {
+                    saveActions(snap);
+                }
             });
             box.addView(row);
         }
@@ -524,9 +538,10 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
             off.setTextSize(16);
             off.setTextColor(0xffff453a);
             off.setPadding(0, 40, 0, 24);
+            Guest.Snap quick = Guest.newestQuick(list);
             off.setOnClickListener(v -> {
                 dialog[0].dismiss();
-                askTurnOff();
+                askTurnOff(quick);
             });
             box.addView(off);
         }
@@ -604,14 +619,49 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                 .show();
     }
 
-    private void askTurnOff() {
+    /**
+     * The way back: the quick save kept after a Turn off. Going back loads it (into the running iOS, or as the
+     * start), and from then on it is the normal quick save.
+     */
+    private void askGoBack(Guest.Snap snap) {
+        int os = Guest.os(this);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Go back to the save of " + when(snap) + "?")
+                .setMessage(goBackText(this, os, snap))
+                .setPositiveButton("Go back", (d, w) -> {
+                    Guest.goBack(this, os, snap.tag);
+                    status.setText("Going back to " + when(snap) + "…");
+                    restart.setVisibility(View.GONE);
+                    GuestService.load(this, snap.tag);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** The Go back dialog's text: what is undone, and the hardware the save opens with. */
+    static String goBackText(android.content.Context c, int os, Guest.Snap snap) {
+        String hw = Guest.hardware(c, os, snap.tag);
+        return (os == Guest.WATCH ? "watchOS" : "iOS") + " goes back to how it was at " + when(snap)
+                + ": what you did after that (settings, apps, files) is undone.\n\n"
+                + snap.date + " · " + snap.size + " · opens with " + hw
+                + (Guest.otherHardware(c, os, snap.tag) ? " (its own; boots keep the setting, "
+                + Guest.ramMiB(c, os) / 1024 + " GB)" : "");
+    }
+
+    /** What Turn off says, @quick the quick save (null: none), which stays as a way back. */
+    static String turnOffText(int os, Guest.Snap quick) {
+        return (os == Guest.WATCH ? "watchOS shuts down as an Apple Watch does" : "iOS shuts down as an iPhone does")
+                + ": settings and apps stay, open apps close. The next start boots (a few minutes)."
+                + (quick == null ? "" : " The last save (" + when(quick) + ") stays as a way back until the next Save and close.")
+                + " Named saves stay."
+                + (os == Guest.IOS26 ? "\n\niOS 26 is slow for about 15 minutes after a boot (its own "
+                + "start-up work). Save and close keeps it as it is, past that." : "");
+    }
+
+    private void askTurnOff(Guest.Snap quick) {
         new android.app.AlertDialog.Builder(this)
                 .setTitle(Guest.watchRunning() ? "Turn off watchOS?" : "Turn off iOS?")
-                .setMessage((Guest.watchRunning() ? "watchOS shuts down as an Apple Watch does" : "iOS shuts down as an iPhone does")
-                        + ": settings and apps stay, open apps close. "
-                        + "The next start boots (a few minutes) instead of going on from here. Named saves stay."
-                        + (Guest.ios26Running() && !Guest.watchRunning() ? "\n\niOS 26 is slow for about 15 minutes after a boot (its own "
-                        + "start-up work). Save and close keeps it as it is, past that." : ""))
+                .setMessage(turnOffText(Guest.os(this), quick))
                 .setPositiveButton("Turn off", (d, w) -> {
                     if (!Guest.running() || Guest.saving() || closing) {
                         return;

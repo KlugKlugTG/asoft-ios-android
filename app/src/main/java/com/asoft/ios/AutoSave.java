@@ -91,8 +91,13 @@ final class AutoSave {
                 mapsArmed = false;
                 toast(c, "iOS's graphics memory is close to Android's limit: saving iOS now, in case it stops");
             } else if (!settledDone && settled(stderr, settleMinS) && unwatched(c)) {
-                why = "iOS has settled after its boot";
                 settledDone = true;
+                // after a Turn off the quick save is the user's way back: only the user's own save replaces it
+                if (Guest.quickStale(c, Guest.os(c))) {
+                    AppLog.note(c, "auto save: iOS has settled, not saved (the quick save is a way back)");
+                } else {
+                    why = "iOS has settled after its boot";
+                }
             }
             if (why == null) {
                 continue;

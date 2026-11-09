@@ -40,6 +40,8 @@ public class MainActivity extends Activity {
     private TextView freeRam, powerWarn, scale26Row, ram26Row, ramWatchRow, watchBootRow, watchEraseRow;
     private LinearLayout updateBar;
     private TextView updateText, updateRow;
+    /** Each card's "Go back to the save of …": the quick save kept after a Turn off (Guest.wayBack). */
+    private Button back16, back26, backWatch;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -163,6 +165,7 @@ public class MainActivity extends Activity {
         saveInfo.setPadding(0, 12, 0, 24);
         primary = button(card, "", v -> primaryAction());
         primary.setTextSize(18);
+        back16 = backButton(card, Guest.IOS16);
         box.addView(card);
 
         card26 = new LinearLayout(this);
@@ -177,6 +180,7 @@ public class MainActivity extends Activity {
         info26.setPadding(0, 12, 0, 24);
         primary26 = button(card26, "", v -> primary26Action());
         primary26.setTextSize(18);
+        back26 = backButton(card26, Guest.IOS26);
         LinearLayout.LayoutParams c26 = new LinearLayout.LayoutParams(-1, -2);
         c26.topMargin = 24;
         box.addView(card26, c26);
@@ -197,6 +201,7 @@ public class MainActivity extends Activity {
             }
         });
         primaryWatch.setTextSize(18);
+        backWatch = backButton(cardWatch, Guest.WATCH);
         LinearLayout.LayoutParams cW = new LinearLayout.LayoutParams(-1, -2);
         cW.topMargin = 24;
         box.addView(cardWatch, cW);
@@ -234,22 +239,27 @@ public class MainActivity extends Activity {
         });
 
         running = group(more, 16);
-        row(running, "Turn off (no save)", 0xffff453a, v -> new AlertDialog.Builder(this)
-                .setTitle("Turn off " + (Guest.os(this) == Guest.WATCH ? "watchOS" : "iOS") + "?")
-                .setMessage((Guest.os(this) == Guest.WATCH ? "watchOS shuts down as an Apple Watch does"
-                        : "iOS shuts down as an iPhone does") + ": settings and apps stay, open apps close. "
-                        + "The next start boots (a few minutes). Named saves stay."
-                        + (Guest.os(this) == Guest.IOS26 ? "\n\niOS 26 is slow for about 15 minutes after a boot (its own "
-                        + "start-up work). Save and close keeps it as it is, past that." : ""))
-                .setPositiveButton("Turn off", (d, w) -> {
-                    if (Guest.running()) {
-                        GuestService.powerOff(this);
-                        state.setText("Turning iOS off…");
-                        state.postDelayed(this::refreshUntilOff, 2000);
-                    }
-                })
-                .setNegativeButton("Cancel", null)
-                .show());
+        row(running, "Turn off (no save)", 0xffff453a, v -> new Thread(() -> {
+            // the quick save's time for the text (from QEMU: off the UI thread)
+            Guest.Snap quick = Guest.newestQuick(Guest.snapshots(this));
+            runOnUiThread(() -> {
+                if (isFinishing()) {
+                    return;
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("Turn off " + (Guest.os(this) == Guest.WATCH ? "watchOS" : "iOS") + "?")
+                        .setMessage(ScreenActivity.turnOffText(Guest.os(this), quick))
+                        .setPositiveButton("Turn off", (d, w) -> {
+                            if (Guest.running()) {
+                                GuestService.powerOff(this);
+                                state.setText("Turning iOS off…");
+                                state.postDelayed(this::refreshUntilOff, 2000);
+                            }
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+        }, "turn-off-ask").start());
         LinearLayout ios = group(more, 16);
         freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
         updateRow = row(ios, "", Color.WHITE, v -> {
@@ -456,6 +466,49 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** A card's "Go back to the save of …" (hidden until the card's refresh finds a way back). */
+    private Button backButton(LinearLayout card, int os) {
+        Button b = button(card, "", v -> goBack(os, (Guest.Snap) v.getTag()));
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setTextColor(0xff0a84ff);
+        b.setTextSize(15);
+        b.setVisibility(View.GONE);
+        return b;
+    }
+
+    /** Shows @b for the way back @snap (null: hides it), with its size and @hw, what it opens with. On the UI thread. */
+    private static void showBack(Button b, Guest.Snap snap, String hw) {
+        b.setTag(snap);
+        b.setVisibility(snap == null ? View.GONE : View.VISIBLE);
+        if (snap != null) {
+            b.setText("Go back to the save of " + ScreenActivity.when(snap) + "\n" + snap.size.replace(" ", "") + " · " + hw);
+        }
+    }
+
+    /** The way back after a Turn off: the quick save it kept loads, into the running @os or as its start. */
+    private void goBack(int os, Guest.Snap snap) {
+        if (snap == null) {
+            return;
+        }
+        if (Guest.running() && Guest.os(this) != os) {
+            open(os);       // says to close the other one first
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Go back to the save of " + ScreenActivity.when(snap) + "?")
+                .setMessage(ScreenActivity.goBackText(this, os, snap))
+                .setPositiveButton("Go back", (d, w) -> whenPowerOk(() -> {
+                    Guest.select(this, os);
+                    Guest.goBack(this, os, snap.tag);
+                    if (Guest.running()) {
+                        GuestService.load(this, snap.tag);
+                    }
+                    startActivity(new Intent(this, ScreenActivity.class));
+                }))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     /** Opens iOS @os: its screen starts it (quick boot when it was saved). One QEMU at a time. */
     private void open(int os) {
         if (Guest.running() && Guest.os(this) != os) {
@@ -534,12 +587,40 @@ public class MainActivity extends Activity {
                     Guest.setRamMiB(this, os, ch[chosen[0]]);
                     refresh();
                     if (changed) {
-                        Toast.makeText(this, "From the next full start (Boot … not from the saved state): a save opens with "
-                                + "the memory it was made with", Toast.LENGTH_LONG).show();
+                        noteRamChange(os);
                     }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    /**
+     * After the memory of @os changed: it applies from the next start, a boot; a quick save made with the other
+     * size stays as a way back (Guest.otherHardware), nothing is deleted. The snapshot list comes from qemu-img or
+     * QEMU: off the UI thread.
+     */
+    private void noteRamChange(int os) {
+        new Thread(() -> {
+            boolean up = Guest.running() && Guest.os(this) == os;
+            Guest.Snap quick = up || Guest.userDisk(this, os).exists() ? Guest.newestQuick(Guest.snapshots(this, os)) : null;
+            String name = os == Guest.WATCH ? "watchOS" : "iOS 26";
+            boolean other = quick != null && Guest.otherHardware(this, os, quick.tag);
+            String text = quick != null && !other && !up
+                    ? "Your save of " + ScreenActivity.when(quick) + " has this size: the next start goes on from it ("
+                    + Guest.hardware(this, os, quick.tag) + "). Boots use the new size."
+                    : "This applies from the next start, a boot" + (up ? " (after this run's Save and close or Turn off)" : "")
+                    + "." + (other ? " Your save of " + ScreenActivity.when(quick) + " stays as a way back; it opens with "
+                    + Guest.hardware(this, os, quick.tag) + "." : "");
+            runOnUiThread(() -> {
+                if (!isFinishing()) {
+                    new AlertDialog.Builder(this)
+                            .setTitle(name + "'s memory: " + Guest.ramMiB(this, os) / 1024 + " GB")
+                            .setMessage(text)
+                            .setPositiveButton("OK", null)
+                            .show();
+                }
+            });
+        }, "ram-change-note").start();
     }
 
     /** iOS 26's card: hidden in a release build until its files are on the phone. */
@@ -581,9 +662,16 @@ public class MainActivity extends Activity {
                     quick = s;
                 }
             }
+            Guest.Snap back = !up && Guest.isWayBack(this, Guest.IOS26, quick) ? quick : null;
+            String hw = back == null ? "" : Guest.hardware(this, Guest.IOS26, back.tag);
             String info;
             if (up) {
                 info = "On the phone's GPU. " + list.size() + (list.size() == 1 ? " save" : " saves");
+            } else if (back != null) {
+                info = (Guest.otherHardware(this, Guest.IOS26, back.tag) ? "The memory setting changed: the next start "
+                        + "boots with " + Guest.ramMiB(this, Guest.IOS26) / 1024 + " GB" : "Turned off: the next start boots")
+                        + " (about 3 minutes, then about 15 minutes of iOS's own start-up work). Its last save stays as a "
+                        + "way back.";
             } else if (quick != null) {
                 // the last close, or an automatic save (AutoSave: settled after a boot, or before a crash)
                 info = "Goes on from its last save (" + quick.date.substring(5, 16) + ").";
@@ -595,7 +683,10 @@ public class MainActivity extends Activity {
             String err = Guest.startError;
             String text = (!up && err != null && Guest.selected(this) == Guest.IOS26 ? "Did not start: " + err + "\n\n" : "")
                     + info + (twoX ? " Screen 2x." : "");
-            runOnUiThread(() -> info26.setText(text));
+            runOnUiThread(() -> {
+                info26.setText(text);
+                showBack(back26, back, hw);
+            });
         }, "home-refresh26").start();
     }
 
@@ -623,9 +714,15 @@ public class MainActivity extends Activity {
                     quick = s;
                 }
             }
+            Guest.Snap back = !up && Guest.isWayBack(this, Guest.WATCH, quick) ? quick : null;
+            String hw = back == null ? "" : Guest.hardware(this, Guest.WATCH, back.tag);
             String info;
             if (up) {
                 info = "Apple Watch Series 9 on the phone's GPU. " + list.size() + (list.size() == 1 ? " save" : " saves");
+            } else if (back != null) {
+                info = (Guest.otherHardware(this, Guest.WATCH, back.tag) ? "The memory setting changed: the next start "
+                        + "boots with " + Guest.ramMiB(this, Guest.WATCH) / 1024 + " GB" : "Turned off: the next start boots")
+                        + " (about 5 to 7 minutes to the watch face). Its last save stays as a way back.";
             } else if (quick != null) {
                 info = "Goes on from its last save (" + quick.date.substring(5, 16) + ").";
             } else {
@@ -636,7 +733,10 @@ public class MainActivity extends Activity {
             String err = Guest.startError;
             String text = (!up && err != null && Guest.selected(this) == Guest.WATCH ? "Did not start: " + err + "\n\n" : "")
                     + info;
-            runOnUiThread(() -> infoWatch.setText(text));
+            runOnUiThread(() -> {
+                infoWatch.setText(text);
+                showBack(backWatch, back, hw);
+            });
         }, "home-refresh-watch").start();
     }
 
@@ -718,9 +818,13 @@ public class MainActivity extends Activity {
                 }
             }
             long free = getFilesDir().getUsableSpace();
+            Guest.Snap back = !up && Guest.isWayBack(this, Guest.IOS16, quick) ? quick : null;
+            String hw = back == null ? "" : Guest.hardware(this, Guest.IOS16, back.tag);
             String info;
             if (up) {
                 info = list.size() + (list.size() == 1 ? " save" : " saves");
+            } else if (back != null) {
+                info = "Turned off: the next start boots (2 to 4 minutes on our phone). Its last save stays as a way back.";
             } else if (quick != null) {
                 info = "Goes on from where you closed it (" + quick.date.substring(5, 16) + "), in about 10 s.";
             } else if (Guest.userDisk(this, Guest.IOS16).exists()) {
@@ -738,7 +842,10 @@ public class MainActivity extends Activity {
             String err = Guest.startError;
             String text = (!up && err != null && Guest.selected(this) == Guest.IOS16 ? "Did not start: " + err + "\n\n" : "")
                     + info + String.format(java.util.Locale.ROOT, "\n%.1f GB free on this phone.", free / 1e9);
-            runOnUiThread(() -> saveInfo.setText(text));
+            runOnUiThread(() -> {
+                saveInfo.setText(text);
+                showBack(back16, back, hw);
+            });
         }, "home-refresh").start();
     }
 }

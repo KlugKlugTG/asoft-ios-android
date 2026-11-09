@@ -436,7 +436,9 @@ final class Guest {
     }
 
     static void setRamMiB(Context c, int forOs, int mib) {
-        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putInt(forOs == WATCH ? "watch-ram" : "ios26-ram", mib).apply();
+        // a new size: a size accepted by a Go back no longer counts (keptRamKey)
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putInt(forOs == WATCH ? "watch-ram" : "ios26-ram", mib)
+                .remove(keptRamKey(c, forOs)).apply();
     }
 
     /** The RAM (MiB) the running iOS 26 or watch booted with, or loaded a save of (kept with each save). */
@@ -453,11 +455,36 @@ final class Guest {
     /** The RAM save @tag was made with; saves from before the setting (2026-11-09) ran on the trees' own size. */
     private static int savedRam(Context c, String tag, int forOs) {
         try {
-            return Integer.parseInt(new String(java.nio.file.Files.readAllBytes(savedRamFile(c, tag).toPath()),
+            return Integer.parseInt(new String(java.nio.file.Files.readAllBytes(
+                    new File(c.getFilesDir(), diskName(c, forOs) + "." + tag + ".ram").toPath()),
                     java.nio.charset.StandardCharsets.US_ASCII).trim());
         } catch (IOException | NumberFormatException e) {
             return forOs == WATCH ? 3072 : 4096;
         }
+    }
+
+    /** What save @tag of @forOs opens with: "3 GB · 4 vCPU" (iOS 16: its vCPUs; its RAM is fixed). */
+    static String hardware(Context c, int forOs, String tag) {
+        int cpus = savedCpus(c, forOs, tag);
+        return (forOs == IOS16 ? "" : savedRam(c, tag, forOs) / 1024 + " GB · ") + cpus + " vCPU";
+    }
+
+    /**
+     * Save @tag of @forOs was made with other hardware than a boot gets now (the memory under More changed since):
+     * its quick save is then a way back, not the next start (the start boots with the setting). A Go back to such a
+     * save accepts its size (keptRamKey), so that run's own later quick saves resume as usual, until the memory
+     * setting changes again.
+     */
+    static boolean otherHardware(Context c, int forOs, String tag) {
+        if (forOs == IOS16) {
+            return false;
+        }
+        int ram = savedRam(c, tag, forOs);
+        return ram != ramMiB(c, forOs) && ram != c.getSharedPreferences("guest", Context.MODE_PRIVATE).getInt(keptRamKey(c, forOs), 0);
+    }
+
+    private static String keptRamKey(Context c, int forOs) {
+        return "kept-ram-" + diskName(c, forOs);
     }
 
     /**
@@ -779,8 +806,8 @@ final class Guest {
     }
 
     /**
-     * Drops the quick-boot state: the next start boots iOS. Null when it is gone; else why not, and
-     * it stays marked stale: never loaded, deleted again at the next start (quickStale).
+     * Drops the quick-boot state (a load of it failed for good): the next start boots iOS. Null when it is
+     * gone; else why not, and it stays marked stale: never loaded by itself (quickStale).
      */
     static String dropQuick(Context c) {
         setQuickStale(c, os(c), true);
@@ -794,9 +821,9 @@ final class Guest {
     }
 
     /**
-     * Turn off (or a load that failed) asked for a boot, but deleting the quick-boot state failed (its
-     * disk was locked: 0.1.1 tried while QEMU was still ending, 2026-11-05): it must never load, or
-     * the disk goes back to that save.
+     * The quick save is not where iOS is any more: Turn off (iOS shut down after it; it stays as a way back
+     * until the next quick save replaces it), or a load of it that failed and could not be deleted. It never
+     * loads by itself, or the disk would go back to that save; only goBack loads it, when the user asks.
      */
     private static String staleKey(Context c, int forOs) {
         return "quick-stale-" + diskName(c, forOs);
@@ -841,7 +868,10 @@ final class Guest {
         p.edit().putBoolean("stale-from-log-done", true).apply();
     }
 
-    /** Before a start: a stale quick save goes now (with QEMU not running it can), and @loadTag never names it. */
+    /**
+     * Before a start: a stale quick save (the way back after a Turn off) stays on the disk, but @loadTag never
+     * names it: the start boots. The next quick save replaces it (saveQuick's rotation), or goBack loads it.
+     */
     private static String dropStaleQuick(Context c, int forOs, String loadTag) {
         if (forOs == IOS16) {
             staleFromOldLog(c);
@@ -849,14 +879,45 @@ final class Guest {
         if (!quickStale(c, forOs)) {
             return resolveQuick(c, forOs, loadTag);
         }
-        String why = deleteQuick(c);
-        if (why == null) {
-            setQuickStale(c, forOs, false);
-            AppLog.note(c, "deleted the stale quick save");
-        } else {
-            AppLog.note(c, "the stale quick save is still there (" + why + "); not loading it");
+        if (isQuick(loadTag)) {
+            AppLog.note(c, "the quick save is a way back (after a Turn off), not loaded: booting");
         }
         return isQuick(loadTag) ? null : loadTag;
+    }
+
+    /**
+     * Quick save @quick of @forOs is a way back, not the next start: kept after a Turn off, or made with other
+     * hardware than the settings give a boot now.
+     */
+    static boolean isWayBack(Context c, int forOs, Snap quick) {
+        return quick != null && isQuick(quick.tag) && (quickStale(c, forOs) || otherHardware(c, forOs, quick.tag));
+    }
+
+    /**
+     * The user chose to go back to @forOs's way back @tag: it is the normal quick save again and opens with its own
+     * hardware; its memory size counts as accepted for this disk's quick saves until the setting changes (boots keep
+     * the setting). The caller then starts iOS, or loads it into the running one.
+     */
+    static void goBack(Context c, int forOs, String tag) {
+        setQuickStale(c, forOs, false);
+        if (otherHardware(c, forOs, tag)) {
+            c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putInt(keptRamKey(c, forOs), savedRam(c, tag, forOs)).commit();
+        }
+        AppLog.note(c, "going back to the quick save " + tag + " (" + hardware(c, forOs, tag) + ")");
+    }
+
+    /**
+     * Before a start that wants the quick save: one made with other hardware (the memory under More changed since)
+     * becomes a way back and the start boots with the setting (goBack opens it).
+     */
+    private static String quickWithOtherHardware(Context c, int forOs, String loadTag) {
+        if (!isQuick(loadTag) || !userDisk(c, forOs).exists() || !otherHardware(c, forOs, loadTag)) {
+            return loadTag;
+        }
+        setQuickStale(c, forOs, true);
+        AppLog.note(c, "the quick save opens with " + hardware(c, forOs, loadTag) + ", the setting is now "
+                + ramMiB(c, forOs) / 1024 + " GB: it stays as a way back; booting");
+        return null;
     }
 
     // -- the user disk's health
@@ -1064,8 +1125,13 @@ final class Guest {
 
     /** A save's vCPU count; 4 for the saves made before 0.1.2, which all had four. */
     static int savedCpus(Context c, String tag) {
+        return savedCpus(c, os(c), tag);
+    }
+
+    static int savedCpus(Context c, int forOs, String tag) {
         try {
-            int n = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(savedCpusFile(c, tag).toPath())).trim());
+            int n = Integer.parseInt(new String(java.nio.file.Files.readAllBytes(
+                    new File(c.getFilesDir(), diskName(c, forOs) + "." + tag + ".cpus").toPath())).trim());
             return n >= 1 && n <= 8 ? n : 4;
         } catch (IOException | NumberFormatException e) {
             return 4;
@@ -1278,6 +1344,7 @@ final class Guest {
         File run = runDir(c);
         ensureUserDisk(c, g);
         loadTag = dropStaleQuick(c, IOS16, loadTag);
+        loadTag = quickWithOtherHardware(c, IOS16, loadTag);
         checkRoom(c, IOS16);
         checkDisk(c, IOS16);
         List<Snap> saves = loadTag == null ? new ArrayList<>() : snapshots(c);
@@ -1506,6 +1573,7 @@ final class Guest {
         if (sb == null) {
             ensureUserDisk(c, g);
             loadTag = dropStaleQuick(c, os, loadTag);
+            loadTag = quickWithOtherHardware(c, os, loadTag);
         }
         // the clock check: iOS 26's after a phone restart, the watch's counter mode (unloadable26)
         String cannot = loadTag == null ? null : unloadable26(c, loadTag);
@@ -1786,8 +1854,9 @@ final class Guest {
      * Turn off without a save: iOS's own shutdown through QEMU's power key (system_powerdown;
      * xnu 0100: every process gets SIGTERM, the disks are synced and unmounted, then PSCI
      * SYSTEM_OFF ends QEMU), as holding an iPhone's side button and sliding does. At most 60 s,
-     * then QEMU is stopped. The quick-boot state goes too: loading it would put the disk back to
-     * that close, so the next start boots from the disk as iOS left it. Not on the UI thread.
+     * then QEMU is stopped. The quick-boot state stays, marked stale: never loaded by itself (that would put
+     * the disk back to that close), so the next start boots from the disk as iOS left it; it is offered as a
+     * way back (goBack) until the next quick save replaces it. Not on the UI thread.
      */
     static String powerOff(Context c) {
         waitForSave();
@@ -1823,12 +1892,9 @@ final class Guest {
             } else {
                 stopAndWait();
             }
-            // QEMU has ended and was reaped, its lock on the disk with it (0.1.1 raced the home screen's
-            // own qemu-img here and lost: qemu-img is one at a time now, and retried on a lock)
-            String why = dropQuick(c);
             long ms = System.currentTimeMillis() - t0;
             return (clean ? "turned off in " + ms + " ms" : "iOS did not turn off in 60 s; QEMU stopped after " + ms + " ms")
-                    + (why == null ? "" : "; quick save not deleted yet: " + why);
+                    + "; the quick save stays as a way back";
         } finally {
             saving.set(false);
         }

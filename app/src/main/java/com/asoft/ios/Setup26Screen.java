@@ -318,7 +318,7 @@ final class Setup26Screen {
         SetupService.State s = SetupService.state;
         boolean running = s.running && mine();
         boolean i26done = PhoneSetup26.installed(a, PhoneSetup26.IOS26), wdone = PhoneSetup26.installed(a, PhoneSetup26.WATCH);
-        want26.setText(i26done ? "iOS 26 ✓ installed" : "iOS 26 (about 10.2 GB from Apple; needs ~40 GB free while it builds, keeps ~12 GB)");
+        want26.setText(i26done ? "iOS 26 ✓ installed" : "iOS 26 (about 10.2 GB from Apple; needs ~46 GB free while it builds, keeps ~12 GB)");
         wantWatch.setText(wdone ? "watchOS ✓ installed" : "watchOS 27.2 (about 5 GB from Apple; needs ~20 GB free while it builds, keeps ~4 GB)");
         want26.setEnabled(!running && !i26done);
         wantWatch.setEnabled(!running && !wdone);
