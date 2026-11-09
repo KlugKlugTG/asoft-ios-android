@@ -409,16 +409,135 @@ final class Guest {
     }
 
     /**
-     * The device tree for the 2x screen: iOS 26's own with /chosen/display-scale 2 (a 32-byte property
-     * name, a 4-byte length, the value), written next to the app's files when missing or older.
+     * The guest's RAM in MiB, per OS, chosen under More (iOS 26 3, 4 or 6 GiB; the watch 2 or 3 GiB). Unchosen:
+     * 4 / 3 GiB (the trees' own) on a phone with ~12 GB, 3 / 2 GiB on a smaller one (2 GiB slowed the watch's
+     * cold Settings from 5.5 to 27 s but left ~1.3 GB more to Android, WATCHOS.md). A save always loads with
+     * the RAM it was made with (savedRam), so a new size takes effect at the next full start.
      */
-    private static File dtree2x(Context c, File g, String tree) throws IOException {
-        File src = new File(g, tree);
-        File out = new File(c.getFilesDir(), tree + "-2x");
+    static final int[] RAM_CHOICES_26 = {3072, 4096, 6144}, RAM_CHOICES_WATCH = {2048, 3072};
+
+    static int ramDefault(Context c, int forOs) {
+        boolean small = GpuCheck.ram(c) < 10_000_000_000L;
+        return forOs == WATCH ? (small ? 2048 : 3072) : (small ? 3072 : 4096);
+    }
+
+    static int ramMiB(Context c, int forOs) {
+        return c.getSharedPreferences("guest", Context.MODE_PRIVATE).getInt(forOs == WATCH ? "watch-ram" : "ios26-ram", ramDefault(c, forOs));
+    }
+
+    static void setRamMiB(Context c, int forOs, int mib) {
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putInt(forOs == WATCH ? "watch-ram" : "ios26-ram", mib).apply();
+    }
+
+    /** The RAM (MiB) the running iOS 26 or watch booted with, or loaded a save of (kept with each save). */
+    private static volatile int bootRamMiB;
+
+    static int bootRamMiB() {
+        return bootRamMiB;
+    }
+
+    private static File savedRamFile(Context c, String tag) {
+        return new File(c.getFilesDir(), userPrefix(c) + tag + ".ram");
+    }
+
+    /** The RAM save @tag was made with; saves from before the setting (2026-11-09) ran on the trees' own size. */
+    private static int savedRam(Context c, String tag, int forOs) {
+        try {
+            return Integer.parseInt(new String(java.nio.file.Files.readAllBytes(savedRamFile(c, tag).toPath()),
+                    java.nio.charset.StandardCharsets.US_ASCII).trim());
+        } catch (IOException | NumberFormatException e) {
+            return forOs == WATCH ? 3072 : 4096;
+        }
+    }
+
+    /**
+     * @src with @mib of RAM (/chosen dram-size, the size in /memory reg, /product/util's base right after it:
+     * dt-phone.py --ram-gib) and, @twoX, /chosen/display-scale 2; written next to the app's files when missing or
+     * older. The tree itself is returned when nothing changes.
+     */
+    private static File tree(Context c, File src, int mib, boolean twoX) throws IOException {
+        byte[] b = java.nio.file.Files.readAllBytes(src.toPath());
+        long size = (long) mib << 20;
+        long[] at = adtRam(b, src.getName());
+        if (!twoX && at[3] == size) {
+            return src;
+        }
+        File out = new File(c.getFilesDir(), src.getName() + (twoX ? "-2x" : "") + (at[3] == size ? "" : "-" + mib + "m"));
         if (out.isFile() && out.lastModified() >= src.lastModified()) {
             return out;
         }
-        byte[] b = java.nio.file.Files.readAllBytes(src.toPath());
+        if (twoX) {
+            b = twoX(b, src.getName());
+        }
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        long base = bb.getLong((int) at[1]);
+        bb.putLong((int) at[0], size);
+        bb.putLong((int) at[1] + 8, size);
+        bb.putLong((int) at[2], base + size);
+        File tmp = new File(out.getPath() + ".tmp");
+        java.nio.file.Files.write(tmp.toPath(), b);
+        if (!tmp.renameTo(out)) {
+            throw new IOException("cannot write " + out);
+        }
+        return out;
+    }
+
+    /** Offsets of /chosen dram-size, /memory reg and /product/util reg in an Apple device tree, and the RAM size. */
+    private static long[] adtRam(byte[] b, String name) throws IOException {
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        long[] r = {-1, -1, -1, 0};
+        int end = adtWalk(bb, 0, "", r);
+        if (end != b.length || r[0] < 0 || r[1] < 0 || r[2] < 0) {
+            throw new IOException(name + ": no /chosen dram-size, /memory reg or /product/util reg");
+        }
+        r[3] = bb.getLong((int) r[0]);
+        return r;
+    }
+
+    private static int adtWalk(java.nio.ByteBuffer bb, int o, String path, long[] r) {
+        int np = bb.getInt(o), nc = bb.getInt(o + 4);
+        o += 8;
+        String nodeName = "?";
+        java.util.Map<String, Integer> props = new java.util.HashMap<>();
+        for (int i = 0; i < np; i++) {
+            byte[] n = new byte[32];
+            bb.position(o);
+            bb.get(n);
+            int z = 0;
+            while (z < 32 && n[z] != 0) {
+                z++;
+            }
+            String pn = new String(n, 0, z, java.nio.charset.StandardCharsets.US_ASCII);
+            int ln = bb.getInt(o + 32) & 0x7fffffff;
+            props.put(pn, o + 36);
+            if ("name".equals(pn)) {
+                int k = 0;
+                while (k < ln && bb.get(o + 36 + k) != 0) {
+                    k++;
+                }
+                byte[] v = new byte[k];
+                bb.position(o + 36);
+                bb.get(v);
+                nodeName = new String(v, java.nio.charset.StandardCharsets.US_ASCII);
+            }
+            o += 36 + ((ln + 3) & ~3);
+        }
+        String here = path.isEmpty() ? nodeName : path + "/" + nodeName;
+        if (nodeName.equals("chosen") && props.containsKey("dram-size")) {
+            r[0] = props.get("dram-size");
+        } else if (nodeName.equals("memory") && props.containsKey("reg")) {
+            r[1] = props.get("reg");
+        } else if (here.endsWith("/product/util") && props.containsKey("reg")) {
+            r[2] = props.get("reg");
+        }
+        for (int i = 0; i < nc; i++) {
+            o = adtWalk(bb, o, here, r);
+        }
+        return o;
+    }
+
+    /** The 2x screen's tree: /chosen/display-scale 2 (a 32-byte property name, a 4-byte length, the value). */
+    private static byte[] twoX(byte[] b, String tree) throws IOException {
         byte[] name = java.util.Arrays.copyOf("display-scale".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 32);
         int at = -1;
         for (int i = 0; i + 40 <= b.length; i += 4) {
@@ -438,12 +557,7 @@ final class Guest {
         }
         b[at + 36] = 2;
         b[at + 37] = b[at + 38] = b[at + 39] = 0;
-        File tmp = new File(out.getPath() + ".tmp");
-        java.nio.file.Files.write(tmp.toPath(), b);
-        if (!tmp.renameTo(out)) {
-            throw new IOException("cannot write " + out);
-        }
-        return out;
+        return b;
     }
 
     private static void ensureUserDisk(Context c, File g) throws IOException {
@@ -599,6 +713,7 @@ final class Guest {
                 savedLedsFile(c, o.tag).delete();
                 savedCpusFile(c, o.tag).delete();
                 savedClockFile(c, o.tag).delete();
+                savedRamFile(c, o.tag).delete();
                 if (d == null || !d.replace(" ", "").equals("{\"return\":\"\"}")) {
                     AppLog.note(c, "the older quick save " + o.tag + " stays until the next start: delvm " + d);
                 }
@@ -630,6 +745,7 @@ final class Guest {
         savedLedsFile(c, tag).delete();
         savedCpusFile(c, tag).delete();
         savedClockFile(c, tag).delete();
+        savedRamFile(c, tag).delete();
         Qmp q = qmp;
         if (running() && q != null) {
             String r = q.hmp("delvm " + tag, 60000);
@@ -846,7 +962,7 @@ final class Guest {
         userDisk(c, forOs).delete();
         String prefix = diskName(c, forOs) + ".";
         File[] f = c.getFilesDir().listFiles((d, n) -> n.startsWith(prefix)
-                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock")));
+                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock") || n.endsWith(".ram")));
         if (f != null) {
             for (File x : f) {
                 x.delete();
@@ -880,6 +996,13 @@ final class Guest {
                 w.println(runningOs == WATCH ? WatchProfile.CLOCK : CLOCK_V1);
             } catch (IOException ignored) {
                 // then it counts as a save from before the clock fix
+            }
+            if (bootRamMiB > 0) {
+                try (PrintWriter w = new PrintWriter(new FileWriter(savedRamFile(c, tag)))) {
+                    w.println(bootRamMiB);
+                } catch (IOException ignored) {
+                    // then it loads with the trees' own size, which may not be its own
+                }
             }
         }
     }
@@ -1435,13 +1558,19 @@ final class Guest {
         boolean aod = sb == null && !watch && aodDisk(userDisk(c, IOS26)) && aodFiles(g);
         aodRunning = aod;
         String tree = aod ? DTREE26_AOD : DTREE26;
-        String dtree = watch ? WatchProfile.part(c, WatchProfile.DTREE).getPath()
-                : ov.containsKey("dtree") ? new File(g, ov.get("dtree")).getPath()
-                : twoX ? dtree2x(c, g, tree).getPath() : new File(g, tree).getPath();
-        String tc = watch ? WatchProfile.part(c, WatchProfile.TC).getPath() : new File(g, aod ? AOD26_TC : "root26m.tc").getPath();
+        // the RAM: a save's own (it only loads into the size it was made with), else the one chosen under More
+        String dtree, tc;
         if (sb != null) {
-            dtree = sb.dtree.getPath();
+            dtree = sb.dtree.getPath();     // the setup's own trees, their own RAM
             tc = sb.tc.getPath();
+            bootRamMiB = 0;
+        } else {
+            int ram = resumed ? savedRam(c, loadTag, os) : ramMiB(c, os);
+            bootRamMiB = ram;
+            dtree = ov.containsKey("dtree") && !watch ? new File(g, ov.get("dtree")).getPath()
+                    : tree(c, watch ? WatchProfile.part(c, WatchProfile.DTREE) : new File(g, tree), ram, twoX).getPath();
+            tc = watch ? WatchProfile.part(c, WatchProfile.TC).getPath() : new File(g, aod ? AOD26_TC : "root26m.tc").getPath();
+            AppLog.note(c, "guest RAM " + ram + " MiB" + (resumed ? " (the save's)" : ""));
         }
         AppLog.note(c, "screen " + fb26W + "x" + fb26H + (twoX ? " (2x)" : "") + ", device tree " + dtree
                 + (aod ? ", Always On Display (" + AOD26_BASE + ")" : ""));

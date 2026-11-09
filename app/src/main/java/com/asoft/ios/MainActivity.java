@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private TextView stateWatch, infoWatch;
     private Button primaryWatch;
     private LinearLayout more, running;
-    private TextView freeRam, powerWarn, scale26Row, watchBootRow, watchEraseRow;
+    private TextView freeRam, powerWarn, scale26Row, ram26Row, ramWatchRow, watchBootRow, watchEraseRow;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -264,6 +264,8 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, ScreenActivity.class));
         }));
         scale26Row = row(ios, "", Color.WHITE, v -> chooseScale26());
+        ram26Row = row(ios, "", Color.WHITE, v -> chooseRam(Guest.IOS26));
+        ramWatchRow = row(ios, "", Color.WHITE, v -> chooseRam(Guest.WATCH));
         watchBootRow = row(ios, "Boot watchOS, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
                 Guest.select(this, Guest.WATCH);
@@ -446,6 +448,46 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private String ramRowText(int os) {
+        return (os == Guest.WATCH ? "watchOS's memory: " : "iOS 26's memory: ") + Guest.ramMiB(this, os) / 1024 + " GB"
+                + (Guest.ramMiB(this, os) == Guest.ramDefault(this, os) ? " (default for this phone)" : "");
+    }
+
+    /**
+     * The guest's RAM (Guest.ramMiB): less leaves Android more, so it closes iOS less often on a phone with
+     * less RAM; more keeps more apps alive inside iOS. A save loads with the size it was made with, so a new
+     * size takes effect at the next full start.
+     */
+    private void chooseRam(int os) {
+        int[] ch = os == Guest.WATCH ? Guest.RAM_CHOICES_WATCH : Guest.RAM_CHOICES_26;
+        int now = Guest.ramMiB(this, os), def = Guest.ramDefault(this, os);
+        String[] names = new String[ch.length];
+        int pick = 0;
+        for (int i = 0; i < ch.length; i++) {
+            names[i] = ch[i] / 1024 + " GB" + (ch[i] == def ? " (default for this phone)" : "");
+            if (ch[i] == now) {
+                pick = i;
+            }
+        }
+        int[] chosen = {pick};
+        new AlertDialog.Builder(this)
+                // (a message would hide the list: the explanation is in the title and the toast)
+                .setTitle(String.format(java.util.Locale.ROOT, "%s's memory (this phone: %.1f GB; less leaves Android more)",
+                        os == Guest.WATCH ? "watchOS" : "iOS 26", GpuCheck.ram(this) / 1e9))
+                .setSingleChoiceItems(names, pick, (d, w) -> chosen[0] = w)
+                .setPositiveButton("Use", (d, w) -> {
+                    boolean changed = ch[chosen[0]] != now;
+                    Guest.setRamMiB(this, os, ch[chosen[0]]);
+                    refresh();
+                    if (changed) {
+                        Toast.makeText(this, "From the next full start (Boot … not from the saved state): a save opens with "
+                                + "the memory it was made with", Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     /** iOS 26's card: hidden in a release build until its files are on the phone. */
     private void refresh26() {
         boolean debug = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
@@ -456,6 +498,10 @@ public class MainActivity extends Activity {
         if (scale26Row != null) {
             scale26Row.setText("iOS 26's screen: " + (twoX ? "2x (faster)" : "3x (sharp)"));
             scale26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
+        }
+        if (ram26Row != null) {
+            ram26Row.setText(ramRowText(Guest.IOS26));
+            ram26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
         }
         boolean up = Guest.running() && Guest.os(this) == Guest.IOS26;
         if (missing != null) {
@@ -505,6 +551,8 @@ public class MainActivity extends Activity {
         cardWatch.setVisibility(have ? View.VISIBLE : View.GONE);
         watchBootRow.setVisibility(have ? View.VISIBLE : View.GONE);
         watchEraseRow.setVisibility(have ? View.VISIBLE : View.GONE);
+        ramWatchRow.setText(ramRowText(Guest.WATCH));
+        ramWatchRow.setVisibility(have ? View.VISIBLE : View.GONE);
         if (!have) {
             return;
         }
