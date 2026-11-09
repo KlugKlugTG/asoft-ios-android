@@ -1086,7 +1086,13 @@ final class PhoneSetup26 {
     private static void iosWallpaper(Context c, PhoneSetup.Progress p, BooleanSupplier cancelled) throws IOException {
         // 5.3.6: root.qcow2 on the top layer, booted once: DataMigration and then PosterBoard's first run write
         // into it (a disk stopped before DataMigration ends runs it again at every start)
-        overlay(c, "root26-gpu.qcow2", "root.qcow2");
+        // debug: files/setup/a26/phone/keep-root boots the last run's root.qcow2 again (what its DataMigration
+        // left: its crash reports, whether it goes on from there) instead of a fresh layer
+        if ((c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && new File(work(c), "phone/keep-root").isFile() && in(c, "root.qcow2").isFile()) {
+            AppLog.note(c, "setup26: keep-root: booting the last run's root.qcow2 again");
+        } else {
+            overlay(c, "root26-gpu.qcow2", "root.qcow2");
+        }
         java.nio.file.Files.copy(in(c, "root26-gpu.tc").toPath(), in(c, "root.tc").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         startCool(c, boot26(c, "root.qcow2", "fw/bootkc", "dtree-phone-aod", "root.tc"), p, "ios26:wallpaper", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
@@ -1129,8 +1135,9 @@ final class PhoneSetup26 {
                     // phone panicked on a SpringBoard.migrator hang that the PC only reports), and what crashes
                     lastDiag = min / 5;
                     String d = con.run("cd /private/var/mobile/Library/Logs/CrashReporter && ls | cut -d- -f1 | sort | uniq -c"
-                            + " | sort -rn | head -8 | tr '\\n' ';'; s=$(ls -t stacks+com.apple.datamigrator* 2> /dev/null | head -1);"
-                            + " [ -n \"$s\" ] && echo \" newest $s:\" && head -c 400 \"$s\" | tr '\\n' ' '", 60_000, 60_000);
+                            + " | sort -rn | head -8 | tr '\\n' ';'; for s in stacks+com.apple.datamigrator*; do [ -f \"$s\" ] || continue;"
+                            + " while IFS= read -r l; do case \"$l\" in *Plugin:*|*\\\"reason\\\"*) echo \" ${s:30:17}: ${l:0:260}\"; break;; esac;"
+                            + " done < \"$s\"; done", 60_000, 60_000);
                     AppLog.note(c, "setup26: DataMigration " + min + " min, thermal " + thermal(c) + ", crash reports: "
                             + (d == null ? "(no answer)" : d.trim()));
                 }
