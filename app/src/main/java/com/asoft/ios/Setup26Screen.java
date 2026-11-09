@@ -263,9 +263,22 @@ final class Setup26Screen {
             gpu.setTextColor(GREEN);
             return;
         }
-        gpu.setText("This phone's GPU is not supported yet, so iOS 26 and watchOS cannot be installed (there is no mode "
-                + "without the GPU). Please send us the check's log: it says what the GPU and its driver lack, which is what "
-                + "support for it needs.\n\n" + r.summary);
+        StringBuilder t = new StringBuilder(r.summary);
+        if (!r.why.isEmpty()) {
+            t.append("\n\nIt needs:");
+            for (String w : r.why) {
+                t.append("\n• ").append(w);
+            }
+        }
+        if (!r.slow.isEmpty()) {
+            t.append("\n\n").append(r.slow);
+        }
+        t.append(r.never
+                ? "\n\nThere is no mode without the GPU, so they cannot be installed here. You can still send us the check's log: "
+                        + "it helps us know which phones people have."
+                : "\n\nThere is no mode without the GPU, so they cannot be installed yet. Please send us the check's log: it says "
+                        + "what this GPU's driver lacks and helps us add it.");
+        gpu.setText(t.toString());
         gpu.setTextColor(ORANGE);
         button(gpuButtons, "Copy log", v -> {
             ClipboardManager cm = a.getSystemService(ClipboardManager.class);
@@ -305,9 +318,14 @@ final class Setup26Screen {
         SetupService.State s = SetupService.state;
         boolean running = s.running && mine();
         boolean i26done = PhoneSetup26.installed(a, PhoneSetup26.IOS26), wdone = PhoneSetup26.installed(a, PhoneSetup26.WATCH);
-        want26.setText(i26done ? "iOS 26 ✓ installed" : "iOS 26 (about 10.2 GB from Apple; needs ~40 GB free while it builds, keeps ~12 GB)");
+        boolean ram26 = GpuCheck.ram(a) >= GpuCheck.RAM_IOS26;
+        want26.setText(i26done ? "iOS 26 ✓ installed" : !ram26 ? "iOS 26 needs a phone with 8 GB of RAM"
+                : "iOS 26 (about 10.2 GB from Apple; needs ~40 GB free while it builds, keeps ~12 GB)");
+        if (!ram26 && want26.isChecked() && !i26done) {
+            want26.setChecked(false);
+        }
         wantWatch.setText(wdone ? "watchOS ✓ installed" : "watchOS 27.2 (about 5 GB from Apple; needs ~20 GB free while it builds, keeps ~4 GB)");
-        want26.setEnabled(!running && !i26done);
+        want26.setEnabled(!running && !i26done && ram26);
         wantWatch.setEnabled(!running && !wdone);
         choice.setVisibility(pass ? View.VISIBLE : View.GONE);
 

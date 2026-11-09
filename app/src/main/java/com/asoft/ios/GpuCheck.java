@@ -66,6 +66,133 @@ final class GpuCheck {
         String summary = "";            // one line for people
         final List<String> missing = new ArrayList<>();
         String report = "";             // the whole log, to copy or share
+        /** When it did not pass: true = will not run on this phone with its driver; false = not supported yet. */
+        boolean never;
+        /** Why, in plain words (what decided @never, then what else is missing). */
+        final List<String> why = new ArrayList<>();
+        /** A note that is not a reason by itself (a CPU without what the fast engine needs), or "". */
+        String slow = "";
+        long ram;                       // the phone's RAM (MemoryInfo.totalMem)
+    }
+
+    /*
+     * RAM a phone needs (MemoryInfo.totalMem, which an "8 GB" phone reports as ~7.3-7.6 GB): the guest's RAM
+     * (iOS 26 4 GiB, a first save ~3.7 GB; the watch 3 GiB, WatchProfile) plus QEMU, Turnip and reims (~1.5 GB
+     * on the S25) plus Android itself. Estimates, not measured on such phones (2026-11-09).
+     */
+    static final long RAM_IOS26 = 7_000_000_000L, RAM_WATCH = 5_000_000_000L;
+
+    static long ram(Context c) {
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        c.getSystemService(android.app.ActivityManager.class).getMemoryInfo(mi);
+        return mi.totalMem;
+    }
+
+    /** What our side could add for a driver that lacks it (m2v's dma-buf import, copies instead of sparse binds). */
+    private static String coverable(String lack) {
+        if (lack.contains("external_memory_host")) {
+            return "importing the app's memory into the GPU (VK_EXT_external_memory_host; a dma-buf route could replace it)";
+        }
+        if (lack.startsWith("sparse") || lack.contains("sparse")) {
+            return "sparse memory binding (copies could replace it)";
+        }
+        return null;
+    }
+
+    /** A lack that rules this phone out with its current driver, in plain words, or null. */
+    private static String fatal(String lack) {
+        if (lack.startsWith("Vulkan 1.2")) {
+            return "Vulkan 1.2";     // judge() says which one the driver has
+        }
+        if (lack.equals("descriptorIndexing") || lack.equals("runtimeDescriptorArray") || lack.equals("descriptorBindingPartiallyBound")) {
+            return "descriptor indexing, which the Metal translation's argument buffers need";   // one line for the three
+        }
+        return null;
+    }
+
+    /**
+     * Sorts a failed check: will not run here (the phone's driver fails the basic tests, has no Vulkan 1.2 or no
+     * descriptor indexing, or the phone has too little RAM), or not supported yet (it lacks only what our side could
+     * add: host-memory import, sparse binding; or Turnip, ours, fails on an Adreno).
+     */
+    private static void judge(Context c, Result r, List<String> sysLines, boolean adrenoGpu) {
+        r.ram = ram(c);
+        if (r.pass && r.ram < RAM_WATCH) {
+            r.pass = false;         // the GPU would do, the phone's memory would not
+        }
+        if (!Guest.nativeMissing().isEmpty()) {
+            r.slow = "The CPU lacks what the fast engine needs (" + Guest.nativeMissing() + "): it would run very slowly.";
+        }
+        if (r.pass) {
+            return;
+        }
+        List<String> never = new ArrayList<>(), later = new ArrayList<>(), other = new ArrayList<>();
+        if (r.ram < RAM_WATCH) {
+            never.add(String.format(Locale.ROOT, "more RAM: this phone has %.1f GB, watchOS needs a 6 GB phone and iOS 26 an 8 GB one", r.ram / 1e9));
+        }
+        boolean compute = false, render = false, ended = false, sawDevice = false;
+        String api = "";
+        for (String l : sysLines) {
+            if (l.startsWith("compute: ")) {
+                compute = l.startsWith("compute: 0 of ");
+            } else if (l.startsWith("render: ")) {
+                render = l.startsWith("render: 0 of ");
+            } else if (l.startsWith("device api: ")) {
+                api = l.substring(12);
+            } else if (l.startsWith("device: vkCreateDevice")) {
+                sawDevice = true;
+            } else if (l.startsWith("result: ")) {
+                ended = true;
+            } else if (l.startsWith("lacks: ")) {
+                String lack = l.substring(7);
+                String f = fatal(lack), k = coverable(lack);
+                if (f != null) {
+                    if (!never.contains(f)) {
+                        never.add(f);
+                    }
+                } else if (k != null) {
+                    later.add(k);
+                } else {
+                    other.add(lack);
+                }
+            }
+        }
+        if (adrenoGpu) {
+            // Turnip is the app's own driver: what it lacks or fails on an Adreno is ours to fix
+            r.never = !never.isEmpty() && never.get(0).startsWith("more RAM");
+            if (r.never) {
+                r.why.add(never.get(0));
+            } else {
+                r.why.add("the app's Turnip driver does not run iOS 26 on this Adreno yet");
+                r.why.addAll(r.missing);
+            }
+            return;
+        }
+        if (!ended || !sawDevice) {
+            never.add(0, "a working Vulkan driver (the phone's driver " + (ended ? "made no device" : "stopped the test") + ")");
+        } else if (!compute || !render) {
+            never.add(0, "a driver that passes the basic tests (" + (!compute ? "compute" : "") + (!compute && !render ? " and " : "")
+                    + (!render ? "drawing" : "") + " gave wrong results or did not run)");
+        }
+        int v12 = never.indexOf("Vulkan 1.2");
+        boolean old = !api.isEmpty() && !api.matches("Vulkan 1\\.([2-9]|\\d\\d).*");
+        if (v12 >= 0 || old) {
+            String s = "Vulkan 1.2 (the driver has " + (api.isEmpty() ? "an older one" : api) + ")";
+            if (v12 >= 0) {
+                never.set(v12, s);
+            } else {
+                never.add(s);
+            }
+        }
+        // anything else a required feature lacks is not ours to add either
+        r.never = !never.isEmpty() || !other.isEmpty();
+        r.why.addAll(never);
+        r.why.addAll(other);
+        for (String k : later) {
+            if (!r.why.contains(k)) {
+                r.why.add(k);
+            }
+        }
     }
 
     static volatile boolean running;
@@ -89,12 +216,13 @@ final class GpuCheck {
                 turnipEnd = once(c, "turnip");
                 pass = "pass".equals(turnipEnd);
             }
-            if (!pass) {
+            if (!pass || ram(c) < RAM_WATCH) {
                 once(c, "system");
             }
-            c.getSharedPreferences("setup", Context.MODE_PRIVATE).edit().putString("gpucheck-pass", pass ? key(c) : "").apply();
             Result r = last(c);
-            AppLog.note(c, "gpu check: " + (r.pass ? "pass" : "fail: " + String.join(", ", r.missing)) + " (turnip " + turnipEnd + ")");
+            c.getSharedPreferences("setup", Context.MODE_PRIVATE).edit().putString("gpucheck-pass", r.pass ? key(c) : "").apply();
+            AppLog.note(c, "gpu check: " + (r.pass ? "pass" : (r.never ? "will not run here: " : "not supported yet: ") + String.join("; ", r.why))
+                    + " (turnip " + turnipEnd + ")");
             return r;
         } finally {
             running = false;
@@ -205,6 +333,7 @@ final class GpuCheck {
                 .append(" cores; native engine needs: ").append(Guest.nativeMissing().isEmpty() ? "all there" : Guest.nativeMissing()).append('\n');
         rep.append("date: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT).format(new java.util.Date())).append('\n');
         String gpu = "", driver = "";
+        List<String> sysLines = new ArrayList<>();
         for (String which : new String[] {"turnip", "system"}) {
             File log = new File(d, which + ".log");
             if (!log.isFile()) {
@@ -216,6 +345,7 @@ final class GpuCheck {
                 for (String l : Files.readAllLines(log.toPath())) {
                     rep.append(l).append('\n');
                     if (!"turnip".equals(which)) {
+                        sysLines.add(l);
                         if (l.startsWith("gpu: ") && gpu.isEmpty()) {
                             gpu = l.substring(5);
                         }
@@ -237,10 +367,24 @@ final class GpuCheck {
                 rep.append("(cannot read: ").append(e.getMessage()).append(")\n");
             }
         }
+        if (r.ran) {
+            judge(c, r, sysLines, adreno() && !turnipOff(c));
+            rep.append("\n== verdict\n");
+            rep.append(String.format(Locale.ROOT, "ram: %.2f GB (iOS 26 needs %.1f, watchOS %.1f)%n", r.ram / 1e9, RAM_IOS26 / 1e9, RAM_WATCH / 1e9));
+            rep.append("result: ").append(r.pass ? "supported" : r.never ? "will not run on this phone (with its current driver)" : "not supported yet")
+                    .append('\n');
+            for (String w : r.why) {
+                rep.append("needs: ").append(w).append('\n');
+            }
+            if (!r.slow.isEmpty()) {
+                rep.append("note: ").append(r.slow).append('\n');
+            }
+        }
         r.report = rep.toString();
-        r.summary = r.pass ? "Your GPU (" + gpu + ") can run iOS 26 and watchOS." + (driver.isEmpty() ? "" : " Driver: " + driver)
-                : "This phone's GPU" + (gpu.isEmpty() ? "" : " (" + gpu + ")") + " is not supported yet."
-                + (r.missing.isEmpty() ? "" : " It lacks: " + String.join("; ", r.missing) + ".");
+        String name = gpu.isEmpty() ? "" : " (" + gpu + ")";
+        r.summary = r.pass ? "Your GPU" + name + " can run iOS 26 and watchOS." + (driver.isEmpty() ? "" : " Driver: " + driver)
+                : r.never ? "iOS 26 and watchOS will not run on this phone" + name + " with its current graphics driver."
+                : "This phone's GPU" + name + " is not supported yet.";
         return r;
     }
 }
