@@ -953,6 +953,32 @@ final class PhoneSetup26 {
         }
     }
 
+    /**
+     * Starts a setup boot once the phone is cool and charged enough (shouldHold, the helper VM's rule): a boot
+     * cannot be paused (the guest's clock is the host's counter, so its watchdogs would fire), and a hot phone
+     * slows the guest down until datamigrator's own hang limit panics it (2026-11-09: thermal SEVERE, 44 C).
+     */
+    private static void startCool(Context c, Guest.SetupBoot b, PhoneSetup.Progress p, String step, BooleanSupplier cancelled)
+            throws IOException {
+        boolean said = false;
+        while (shouldHold(c)) {
+            if (cancelled.getAsBoolean()) {
+                throw new IOException("stopped");
+            }
+            if (!said) {
+                said = true;
+                AppLog.note(c, "setup26: " + step + " waits for the phone to cool (thermal " + thermal(c) + ")"
+                        + (lowBattery(c) ? " and for its charger" : ""));
+            }
+            p.step(step, 0, "Waiting for the phone to cool down" + (lowBattery(c) ? " and for its charger" : "") + " before iOS boots");
+            sleep(15_000);
+        }
+        if (said) {
+            AppLog.note(c, "setup26: " + step + ": cool enough (thermal " + thermal(c) + ")");
+        }
+        Guest.startSetup(c, b);
+    }
+
     private static void mustRun(Context c, String what) throws IOException {
         if (!Guest.running()) {
             String why = Guest.stopReason(c);
@@ -989,7 +1015,7 @@ final class PhoneSetup26 {
     private static void iosFirstBoot(Context c, PhoneSetup.Progress p, BooleanSupplier cancelled) throws IOException {
         // 4.5: usermanagerd writes the persona manifest and the user session (persona.kb, usersession.kb); the
         // disk has no libMobileGestalt patch yet (the apps step's), so the plain tree and kernel, as the PC's -NoAod
-        Guest.startSetup(c, boot26(c, "root26g.qcow2", "cloud/kernelcache.research.vphone600.decompressed", "dtree-phone", "root26.tc"));
+        startCool(c, boot26(c, "root26g.qcow2", "cloud/kernelcache.research.vphone600.decompressed", "dtree-phone", "root26.tc"), p, "ios26:firstboot", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         try {
@@ -1047,7 +1073,7 @@ final class PhoneSetup26 {
         // into it (a disk stopped before DataMigration ends runs it again at every start)
         overlay(c, "root26-gpu.qcow2", "root.qcow2");
         java.nio.file.Files.copy(in(c, "root26-gpu.tc").toPath(), in(c, "root.tc").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        Guest.startSetup(c, boot26(c, "root.qcow2", "fw/bootkc", "dtree-phone-aod", "root.tc"));
+        startCool(c, boot26(c, "root.qcow2", "fw/bootkc", "dtree-phone-aod", "root.tc"), p, "ios26:wallpaper", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         try {
@@ -1248,7 +1274,7 @@ final class PhoneSetup26 {
         overlay(c, "watchos/rootw-p.qcow2", "watchos/watch.qcow2");
         Guest.SetupBoot b = boot26(c, "watchos/watch.qcow2", "watchos/bootkc-w", "watchos/dtree-w-3g-19m2", "watchos/rootw.tc");
         b.watch = true;
-        Guest.startSetup(c, b);
+        startCool(c, b, p, "watchos:firstboot", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         boolean ark = false;
