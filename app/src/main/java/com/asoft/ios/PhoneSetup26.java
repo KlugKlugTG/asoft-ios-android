@@ -986,6 +986,11 @@ final class PhoneSetup26 {
         if (said) {
             AppLog.note(c, "setup26: " + step + ": cool enough (thermal " + thermal(c) + ")");
         }
+        // mustRun looks for a panic in this boot's console log: the last boot's must not count
+        File serial = new File(Guest.runDir(c), "serial.txt");
+        if (serial.exists() && !serial.delete()) {
+            throw new IOException("could not clear " + serial);
+        }
         Guest.startSetup(c, b);
     }
 
