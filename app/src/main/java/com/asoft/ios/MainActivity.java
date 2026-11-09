@@ -452,7 +452,7 @@ public class MainActivity extends Activity {
         if (Guest.available26(this)) {
             open(Guest.IOS26);
         } else {
-            startActivity(new Intent(this, SetupActivity.class));     // iOS 26 from Apple (Setup26Screen)
+            startActivity(new Intent(this, SetupActivity.class).putExtra(SetupActivity.EXTRA_IOS26, true));  // Setup26Screen
         }
     }
 

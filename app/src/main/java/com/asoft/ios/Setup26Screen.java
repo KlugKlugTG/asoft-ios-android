@@ -255,8 +255,7 @@ final class Setup26Screen {
             // (a pass of another build of the app, or of its Turnip, does not count: checked again)
             gpu.setText("First, a short check that this phone's GPU can run them (a few tests with Vulkan, nothing is downloaded).");
             gpu.setTextColor(Color.WHITE);
-            button(gpuButtons, "Check the GPU", v -> runCheck());
-            return;
+            return;                     // the screen's own button below says "Check the GPU" (onGo)
         }
         if (r.pass && GpuCheck.passed(a)) {
             String warn = GpuCheck.ramWarning(a);
