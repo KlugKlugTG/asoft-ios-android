@@ -958,6 +958,32 @@ final class PhoneSetup26 {
             String why = Guest.stopReason(c);
             throw new IOException("QEMU ended during " + what + (why.isEmpty() ? "" : ": " + why) + "; tap Resume to boot again");
         }
+        // a panicked guest keeps QEMU busy for ever (wdt=-1, no reboot): 2026-11-09 the wallpaper boot sat 50 min
+        // on "userspace panic: datamigrator plugin SpringBoard.migrator hang" before anyone looked
+        String panic = panicLine(new File(Guest.runDir(c), "serial.txt"));
+        if (panic != null) {
+            AppLog.note(c, "setup26: " + panic);
+            throw new IOException("iOS panicked during " + what + " (" + panic + "); tap Resume to boot again");
+        }
+    }
+
+    /** The guest's panic line in the last 64 KB of its console log, or null. */
+    private static String panicLine(File serial) {
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(serial, "r")) {
+            long at = Math.max(0, f.length() - 65536);
+            byte[] b = new byte[(int) (f.length() - at)];
+            f.seek(at);
+            f.readFully(b);
+            String s = new String(b, java.nio.charset.StandardCharsets.ISO_8859_1);
+            int i = s.lastIndexOf("panic(cpu ");
+            if (i < 0) {
+                return null;
+            }
+            int e = s.indexOf('\n', i);
+            return s.substring(i, e < 0 ? s.length() : e).trim();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     private static void iosFirstBoot(Context c, PhoneSetup.Progress p, BooleanSupplier cancelled) throws IOException {
@@ -1039,7 +1065,11 @@ final class PhoneSetup26 {
                 sleep(10_000);
             }
             AppLog.note(c, "setup26: UI after " + (System.currentTimeMillis() - t0) / 1000 + " s");
+            String info = con.run("ls /System/Library/DataClassMigrators | tr '\\n' ' '; for f in /System/Library/DataClassMigrators/SpringBoard.migrator/Info.plist;"
+                    + " do echo \" $f:\"; tr -c '[:print:]' ' ' < $f | tr -s ' ' | head -c 1500; done", 90_000, 60_000);
+            AppLog.note(c, "setup26: migrators: " + (info == null ? "(no answer)" : info.trim()));
             long t1 = System.currentTimeMillis();
+            long lastDiag = -1;
             String plist = "/var/mobile/Library/Preferences/com.apple.migration.plist";
             while (true) {
                 if (cancelled.getAsBoolean()) {
@@ -1052,6 +1082,16 @@ final class PhoneSetup26 {
                 String o = con.run("cat " + plist, 90_000, 60_000);
                 if (o != null && o.contains("LastSystemVersion")) {
                     break;
+                }
+                if (min / 5 != lastDiag) {
+                    // which migrator plugin is slow (datamigrator writes a stacks report per hang; 2026-11-09 the
+                    // phone panicked on a SpringBoard.migrator hang that the PC only reports), and what crashes
+                    lastDiag = min / 5;
+                    String d = con.run("cd /private/var/mobile/Library/Logs/CrashReporter && ls | cut -d- -f1 | sort | uniq -c"
+                            + " | sort -rn | head -8 | tr '\\n' ';'; s=$(ls -t stacks+com.apple.datamigrator* 2> /dev/null | head -1);"
+                            + " [ -n \"$s\" ] && echo \" newest $s:\" && head -c 400 \"$s\" | tr '\\n' ' '", 60_000, 60_000);
+                    AppLog.note(c, "setup26: DataMigration " + min + " min, thermal " + thermal(c) + ", crash reports: "
+                            + (d == null ? "(no answer)" : d.trim()));
                 }
                 if (min > 180) {
                     throw new IOException("DataMigration was not done in 3 hours; tap Resume to redo this boot");
@@ -1302,6 +1342,12 @@ final class PhoneSetup26 {
 
     /** Hot (Android's thermal status SEVERE or worse) until it is back to LIGHT; or the battery low off the charger. */
     private static volatile boolean hot;
+
+    /** Android's thermal status (0 none … 3 severe … 6 shutdown). */
+    static int thermal(Context c) {
+        android.os.PowerManager pm = c.getSystemService(android.os.PowerManager.class);
+        return pm == null ? -1 : pm.getCurrentThermalStatus();
+    }
 
     static boolean shouldHold(Context c) {
         android.os.PowerManager pm = c.getSystemService(android.os.PowerManager.class);
