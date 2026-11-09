@@ -591,7 +591,7 @@ public class MainActivity extends Activity {
         }
         if (!Guest.available(this)) {
             state.setText("iOS 16 is not set up");
-            saveInfo.setText("Set up installs it on this phone from Apple's servers (about two hours, no PC), or brings it from "
+            saveInfo.setText("Set up installs it on this phone from Apple's servers (about 1.5 hours, no PC), or brings it from "
                     + "your PC (Send-ToPhone.cmd).");
             primary.setText("Set up");
             return;

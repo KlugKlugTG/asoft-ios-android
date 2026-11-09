@@ -1,12 +1,31 @@
 # ASoftware iOS for Android
 
-iOS 16, and as a preview iOS 26, in an Android app, on a stock phone: no root, locked bootloader,
-no Termux. The companion
-of [ASoftware iOS for Windows](https://github.com/alpersamur3/asoft-ios), and it runs the iOS that
-the Windows installer set up.
+iOS 16, and as previews iOS 26 and watchOS, in an Android app, on a stock phone: no root, locked
+bootloader, no Termux. iOS 16 can be installed on the phone itself, straight from Apple's servers,
+or brought from a PC. The companion of
+[ASoftware iOS for Windows](https://github.com/alpersamur3/asoft-ios).
 
 Research preview. Tested on a Galaxy S25 Ultra (Snapdragon 8 Elite, 12 GB RAM); iOS 16 also on a
 Galaxy A71 and a Galaxy M31 (much slower: their CPUs cannot run iOS's code natively, see below).
+
+## Which phones
+
+Nothing in it is specific to the S25 Ultra; it is the phone it is developed and measured on.
+
+| | Needs | Recommended |
+|---|---|---|
+| iOS 16 | 64-bit Android 10 or later, 6 GB RAM | ARMv8.2-A or later (iOS's code runs natively), 8 GB RAM or more |
+| iOS 26, watchOS | the same, plus an Adreno GPU (Mesa's Turnip driver) | ARMv8.3-A or later (pointer authentication), 12 GB RAM |
+| Room | about 12 GB per iOS; about 24 GB while installing iOS 16 from Apple | |
+
+- Without the ARMv8.2 features below, iOS still runs, all of it emulated, several times slower.
+- iOS 26 and watchOS are arm64e. On a CPU without pointer authentication (before ARMv8.3) their PAC
+  instructions cannot run natively; untested here, expect them to be slower or not to start.
+- Mali GPUs (most Exynos and MediaTek phones) have no Vulkan driver the GPU path works with yet: iOS
+  26 and watchOS do not run there, iOS 16 does (it draws on the CPU).
+- Speed is mostly the CPU's big cores: an older or smaller core is slower whatever its ARM version.
+- RAM: iOS 16 reached its lock screen on a 6 GB phone (Galaxy M31) with about 0.2 GB left to Android;
+  with less to spare, Android may close it. iOS 26 and watchOS have been run only on a 12 GB phone.
 
 ## What works
 
@@ -32,7 +51,16 @@ only so far. Home screen, apps, touch, keyboard, Liquid Glass; quick boot and sa
 an automatic save before Android could run out of memory. It is slow for about 15 minutes after a
 boot. The iOS 26 card appears once its files are in `/data/local/tmp/asoft/ios26` (put there with adb
 from the Windows install; there is no Send-ToPhone package for iOS 26 yet). 3x (sharp) or 2x
-(faster) screen under More.
+(faster) screen under More. On a disk set up with Always On Display, the side button takes iOS to it
+and a touch there wakes it.
+
+### watchOS (preview)
+
+watchOS 27.2 as an Apple Watch Series 9, on the phone's GPU like iOS 26, in a drawn watch: tap the
+crown to press it, drag it to turn it; the side button is under it. Its own disk and saves. The first
+start boots in 5 to 7 minutes (longer on a hot phone); a save comes back in about 5 s with the right
+time. The card appears once its files are in `/data/local/tmp/asoft/watchos` (with adb, from the
+Windows install).
 
 ## Installing on the phone from Apple (no PC)
 
@@ -62,7 +90,7 @@ Everything it downloads comes from Apple's servers; the app and this repository 
 ## Setting it up from a PC
 
 1. On a Windows PC, install ASoftware iOS with iOS 16.
-2. Install this app on the phone (arm64, Android 10 or later, about 12 GB free).
+2. Install this app on the phone (see Which phones; about 12 GB free).
 3. On the PC, run `Send-ToPhone.cmd` from the ASoftware iOS folder. It packs that iOS into
    `ASoftware-iOS16.asoft` (about 6.5 GB) and, with the phone on USB and USB debugging on, sends it
    to the app. Otherwise copy the file to the phone and pick it in the app.

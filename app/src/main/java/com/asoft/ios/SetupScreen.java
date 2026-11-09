@@ -121,7 +121,7 @@ final class SetupScreen {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setPadding(0, 8, 0, 8);
         text(root, "iOS 16.7.16 for the iPhone X: about 5.8 GB from Apple's own servers, then the phone builds the iOS disk "
-                + "itself, as the PC installer does, and starts iOS once so that your first start is quick. About two hours "
+                + "itself, as the PC installer does, and starts iOS once so that your first start is quick. About 1.5 hours "
                 + "on a Galaxy S25 Ultra. Keep the phone on its charger; you can use it meanwhile.", 15, GRAY)
                 .setPadding(0, 0, 0, 16);
         free = text(root, "", 13, DIM);
