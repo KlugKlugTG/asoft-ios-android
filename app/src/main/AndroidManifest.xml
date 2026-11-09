@@ -87,5 +87,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the emulated device while its screen is on" />
         </service>
+
+        <!-- pairing with this phone's Wireless debugging (WirelessAdb): the code goes into its notification -->
+        <service
+            android:name=".WadbPairService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Waits for the pairing code of Wireless debugging while the user reads it in Settings" />
+        </service>
     </application>
 </manifest>

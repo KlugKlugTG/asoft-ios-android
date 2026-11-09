@@ -174,5 +174,8 @@ The app's code: MIT (LICENSE). The APK also carries:
   https://github.com/sgan81/apfs-fuse).
 - Termux packages QEMU links (GLib, GnuTLS, Nettle, libslirp, pixman, zstd and others, under
   their own licenses): sources at https://github.com/termux/termux-packages.
+- Conscrypt (Apache 2.0, https://github.com/google/conscrypt): TLS 1.3 for the pairing with Wireless
+  debugging. The adb client itself (`Adb*.java`, `Spake2.java`) is the app's own, written after
+  AOSP's adb (Apache 2.0); SPAKE2's two points are BoringSSL's.
 
 Not affiliated with Apple. iOS is Apple's.
