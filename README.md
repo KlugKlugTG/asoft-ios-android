@@ -27,9 +27,9 @@ Nothing in it is specific to the S25 Ultra; it is the phone it is developed and 
 - Speed is mostly the CPU's big cores: an older or smaller core is slower whatever its ARM version.
 - RAM: iOS 16 reached its lock screen on a 6 GB phone (Galaxy M31) with about 0.2 GB left to Android;
   with less to spare, Android may close it. iOS 26 and watchOS have been run only on a 12 GB phone.
-  Their memory is set under More: iOS 26 3 or 4 GB, watchOS 2 or 3 GB (the smaller by default on a
-  phone under 10 GB). iOS 26 with 3 GB left Android 1.5 GB on the S25 Ultra. Less RAM is a warning,
-  not a stop.
+  Their memory is set under More: iOS 26 3, 4 or 6 GB, watchOS 2 or 3 GB (the smaller by default on a
+  phone under 10 GB). On the S25 Ultra iOS 26 left Android 1.5 GB at 3 GB and 0.8 to 1.0 GB at 6 GB,
+  where the app warns that Android may close it. Less RAM is a warning, not a stop.
 
 ## What works
 
@@ -42,7 +42,9 @@ Nothing in it is specific to the S25 Ultra; it is the phone it is developed and 
   Turning the phone's screen off locks iOS too.
 - Quick boot: swiping the app away, or Save and close, keeps iOS as it is; it comes back in about
   10 s instead of a boot of a few minutes. Named saves (about 3 GB each) can be taken and loaded.
-- Turn off (in 💾, or the notification) shuts iOS down without a save; the next start boots.
+- Turn off (in 💾, or the notification) shuts iOS down without a save; the next start boots. The
+  last quick save stays as a way back: Go back, on the home screen or in 💾, returns to it with the
+  memory it was saved with, until the next Save and close replaces it.
 - Settings and apps you add stay on the phone's own copy of the disk.
 
 Not working: App Store and Apple ID, audio, GPU acceleration on iOS 16 (it draws on the CPU).
