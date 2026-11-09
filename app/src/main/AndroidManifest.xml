@@ -71,6 +71,13 @@
                 android:value="Downloads iOS from Apple and builds its disk on the phone, while the user waits for it" />
         </service>
 
+        <!-- the GPU check before iOS 26 / watchOS are downloaded (GpuCheck): its own process, so a driver
+             that crashes takes only that one; exported in the debug build only: driven from adb -->
+        <service
+            android:name=".GpuCheckService"
+            android:exported="${testExported}"
+            android:process=":gpucheck" />
+
         <!-- exported in the debug build only: driven from adb -->
         <service
             android:name=".EngineService"

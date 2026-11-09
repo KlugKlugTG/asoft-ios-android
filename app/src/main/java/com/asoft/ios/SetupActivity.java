@@ -33,6 +33,7 @@ public class SetupActivity extends Activity {
     private ProgressBar bar;
     private volatile boolean busy;
     private SetupScreen fromApple;
+    private Setup26Screen from26;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -78,7 +79,7 @@ public class SetupActivity extends Activity {
 
     private void show() {
         box.removeAllViews();
-        TextView title = text("Set up iOS 16", 26, Color.WHITE);
+        TextView title = text("Set up", 26, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         if (Installer.installed(this)) {
             text("iOS 16 is set up on this phone. Importing or installing again replaces it: this iPhone's settings, apps and saves go.",
@@ -89,6 +90,11 @@ public class SetupActivity extends Activity {
             fromApple = new SetupScreen(this);
         }
         box.addView(fromApple.view());
+        // iOS 26 and watchOS from Apple, behind the GPU check (Setup26Screen)
+        if (from26 == null) {
+            from26 = new Setup26Screen(this);
+        }
+        box.addView(from26.view());
         TextView pc = text("Or bring it from your PC", 18, Color.WHITE);
         pc.setPadding(0, 56, 0, 28);
         text("1. Install ASoftware iOS (iOS 16) on a Windows PC.\n"
@@ -148,10 +154,13 @@ public class SetupActivity extends Activity {
             status.setText("Close iOS first (side bar > Saves > Save and close).");
             return;
         }
-        if (Installer.hasData(this)) {
+        String n = done == null ? "" : done.getName();
+        boolean other = n.contains("iOS26") || n.contains("watchOS");
+        if (Installer.hasData(this) || other) {
             new android.app.AlertDialog.Builder(this)
-                    .setTitle("Replace iOS on this phone?")
-                    .setMessage("This iPhone's settings, apps and saves are deleted first, then the new iOS is copied in.")
+                    .setTitle(n.contains("iOS26") ? "Bring in iOS 26?" : n.contains("watchOS") ? "Bring in watchOS?" : "Replace iOS on this phone?")
+                    .setMessage("What the file replaces goes first: that system's disk with its settings, apps and saves (a user "
+                            + "disk of iOS 26 or the watch is kept as .old). Then the new one is copied in.")
                     .setPositiveButton("Replace", (d, w) -> importNow(in, total, done))
                     .setNegativeButton("Cancel", (d, w) -> {
                         try {
@@ -180,7 +189,7 @@ public class SetupActivity extends Activity {
         new Thread(() -> {
             String result;
             try (InputStream s = in) {
-                Installer.install(this, new java.io.BufferedInputStream(s, 1 << 20), total, (what, at, all) -> runOnUiThread(() -> {
+                String os = Installer.installAny(this, new java.io.BufferedInputStream(s, 1 << 20), total, (what, at, all) -> runOnUiThread(() -> {
                     bar.setIndeterminate(all <= 0);
                     if (all > 0) {
                         bar.setProgress((int) (at * 1000 / all));
@@ -190,9 +199,9 @@ public class SetupActivity extends Activity {
                 if (done != null) {
                     done.delete();
                 }
-                String notes = Installer.kernelNotes(this);
-                result = String.format("iOS 16 is set up (%d s).%s", (System.currentTimeMillis() - t0) / 1000,
-                        notes.isEmpty() ? "" : "\n" + notes);
+                String notes = "16".equals(os) ? Installer.kernelNotes(this) : "";
+                result = String.format("%s is set up (%d s).%s", "16".equals(os) ? "iOS 16" : "26".equals(os) ? "iOS 26" : "watchOS",
+                        (System.currentTimeMillis() - t0) / 1000, notes.isEmpty() ? "" : "\n" + notes);
             } catch (IOException | RuntimeException e) {
                 result = "Not set up: " + e.getMessage();
             }
@@ -207,6 +216,7 @@ public class SetupActivity extends Activity {
         show();
         status.setText(result);
         if (Installer.installed(this) && result.startsWith("iOS 16 is set up")) {
+            Guest.select(this, Guest.IOS16);
             button("Start iOS 16 (the first start takes a few minutes)", v -> {
                 startActivity(new Intent(this, ScreenActivity.class));
                 finish();

@@ -47,8 +47,13 @@ import java.util.zip.Inflater;
 final class IpswFetch {
     static final int CHUNK = 32 << 20;
     static final int CONNECTIONS = 8;
-    /** A deflated member up to this size comes whole in one request and is inflated in memory. */
-    static final long ONE_REQUEST = 256L << 20;
+    /**
+     * A deflated member up to this size comes whole in one request and is inflated in memory (its bytes and
+     * the inflated ones on the heap at once); a bigger one goes in parts and is inflated as a stream. 256 MB
+     * was too much for an app's heap (256 MB growth limit on the S25): cloudOS's 233 MB ramdisk ran it out
+     * of memory (2026-11-08).
+     */
+    static final long ONE_REQUEST = 16L << 20;
     private static final int TRIES = 10;
 
     enum Kind { FILE, SPARSE }

@@ -77,26 +77,118 @@ final class Installer {
      * new disk needs. Not on the UI thread.
      */
     static void install(Context c, InputStream in, long total, Progress p) throws IOException {
-        Guest.erase(c, Guest.IOS16);    // iOS 16's own iPhone only: never iOS 26's or the watch's
-        Guest.select(c, Guest.IOS16);
-        deleteTree(dir(c));
-        File part = new File(c.getFilesDir(), "ios16.part");
+        installAny(c, in, total, p);
+    }
+
+    /**
+     * What a bundle holds: "16" (iOS 16: PARTS), "26" (iOS 26: Guest.PHONE_PARTS26, the layout the phone's own
+     * setup leaves) or "watchos" (WatchProfile's files with iOS 26's sptm, txm and ramdisk), by its manifest,
+     * the archive's first file (Send-ToPhone.ps1 -OS). Returns it.
+     */
+    static String installAny(Context c, InputStream in, long total, Progress p) throws IOException {
+        File part = new File(c.getFilesDir(), "import.part");
         deleteTree(part);
         if (!part.mkdirs()) {
             throw new IOException("cannot create " + part);
         }
+        String[] os = new String[1];
         try {
-            untar(in, part, total, p);
+            // once the manifest is in (the first file): that OS's old disk, user disk and saves go, so the
+            // room they free is there for the new disk
+            untar(in, part, total, p, m -> {
+                os[0] = bundleOs(m);
+                if ("16".equals(os[0])) {
+                    Guest.erase(c, Guest.IOS16);    // iOS 16's own iPhone only: never iOS 26's or the watch's
+                    deleteTree(dir(c));
+                } else if ("26".equals(os[0])) {
+                    for (String n : new String[] {"ios26-user.qcow2", "ios26-2x-user.qcow2"}) {
+                        retireUserDisk(c, n);
+                    }
+                    deleteTree(new File(c.getFilesDir(), "ios26"));
+                } else {
+                    retireUserDisk(c, "watch-user.qcow2");
+                    deleteTree(new File(c.getFilesDir(), "watchos"));
+                }
+            });
+            if (os[0] == null) {
+                throw new IOException("not an ASoftware iOS bundle: no asoft-bundle.json first");
+            }
             p.at("Checking", 0, -1);
-            check(c, part);
-            File d = dir(c);
+            File d;
+            if ("16".equals(os[0])) {
+                check(c, part);
+                Guest.select(c, Guest.IOS16);
+                d = dir(c);
+            } else {
+                String[] need = "26".equals(os[0]) ? Guest.PHONE_PARTS26 : WATCH_PARTS;
+                for (String n : need) {
+                    if (!new File(part, n).isFile()) {
+                        throw new IOException("not a whole " + ("26".equals(os[0]) ? "iOS 26" : "watchOS") + " bundle: no " + n);
+                    }
+                }
+                File disk = new File(part, "26".equals(os[0]) ? Guest.AOD26_BASE : WatchProfile.BASE);
+                byte[] head = new byte[4];
+                try (InputStream s = Files.newInputStream(disk.toPath())) {
+                    if (s.read(head) != 4 || head[0] != 'Q' || head[1] != 'F' || head[2] != 'I' || head[3] != (byte) 0xfb) {
+                        throw new IOException(disk.getName() + " is not a qcow2 image");
+                    }
+                }
+                // the phone's setup marks its own installs with install.json too (Guest.phoneMade26)
+                new File(part, "asoft-bundle.json").renameTo(new File(part, "install.json"));
+                Guest.select(c, "26".equals(os[0]) ? Guest.IOS26 : Guest.WATCH);
+                d = new File(c.getFilesDir(), "26".equals(os[0]) ? "ios26" : "watchos");
+                new File(c.getFilesDir(), Guest.DTREE26 + "-2x").delete();
+            }
             if (!part.renameTo(d)) {
                 throw new IOException("cannot move " + part + " to " + d);
             }
+            return os[0];
         } catch (IOException | RuntimeException e) {
             deleteTree(part);
             throw e;
         }
+    }
+
+    /** The watch's files in a watchOS bundle (WatchProfile.PARTS and the iOS 26 files it shares). */
+    static final String[] WATCH_PARTS = {WatchProfile.KERNEL, WatchProfile.DTREE, WatchProfile.TC, WatchProfile.BASE, "sptm", "txm", "rd-shell.hfs"};
+
+    /** The names a bundle may hold: iOS 16's, iOS 26's and the watch's; anything else in it is skipped. */
+    private static final java.util.Set<String> NAMES = new java.util.HashSet<>();
+
+    static {
+        NAMES.addAll(java.util.Arrays.asList(PARTS));
+        NAMES.addAll(java.util.Arrays.asList(Guest.PHONE_PARTS26));
+        NAMES.addAll(java.util.Arrays.asList(WATCH_PARTS));
+    }
+
+    /** A user disk rests on the disk an import replaces: kept as .old (as the PC keeps it), it cannot boot on the new one. */
+    private static void retireUserDisk(Context c, String name) {
+        File f = new File(c.getFilesDir(), name);
+        if (f.exists()) {
+            File old = new File(f.getPath() + ".old");
+            old.delete();
+            f.renameTo(old);
+            AppLog.note(c, "import: " + name + " rested on the old disk: kept as " + old.getName());
+        }
+    }
+
+    /** "16", "26" or "watchos" from a bundle's manifest; throws for one this app does not know. */
+    private static String bundleOs(File manifest) throws IOException {
+        String text = new String(Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8);
+        try {
+            org.json.JSONObject m = new org.json.JSONObject(text);
+            String os = m.optString("ios");
+            if (m.optInt("format") != 1 || !("16".equals(os) || "26".equals(os) || "watchos".equals(os))) {
+                throw new IOException("a bundle this app does not know: " + text.trim());
+            }
+            return os;
+        } catch (org.json.JSONException e) {
+            throw new IOException("bad asoft-bundle.json", e);
+        }
+    }
+
+    interface ManifestHook {
+        void got(File manifest) throws IOException;
     }
 
     /**
@@ -224,7 +316,7 @@ final class Installer {
         return s.isEmpty() ? 0 : Long.parseLong(s, 8);
     }
 
-    private static void untar(InputStream in, File dir, long total, Progress p) throws IOException {
+    private static void untar(InputStream in, File dir, long total, Progress p, ManifestHook hook) throws IOException {
         byte[] h = new byte[512];
         long done = 0;
         long paxSize = -1;
@@ -281,13 +373,13 @@ final class Installer {
             if (name.startsWith("./")) {
                 name = name.substring(2);
             }
-            boolean wanted = (type == '0' || type == 0) && java.util.Arrays.asList(PARTS).contains(name);
+            boolean wanted = (type == '0' || type == 0) && NAMES.contains(name);
             if (!wanted) {
                 skip(in, padded);
                 done += padded;
                 continue;
             }
-            if (name.equals("disk.qcow2") && dir.getUsableSpace() < size + HEADROOM) {
+            if (name.endsWith(".qcow2") && dir.getUsableSpace() < size + HEADROOM) {
                 throw new IOException(String.format("not enough space: the disk needs %.1f GB and %.1f GB more stay free, %.1f GB are free",
                         size / 1e9, HEADROOM / 1e9, dir.getUsableSpace() / 1e9));
             }
@@ -311,6 +403,9 @@ final class Installer {
             skip(in, padded - size);
             done += padded - size;
             p.at("Copying iOS", done, total);
+            if (name.equals(PARTS[0])) {
+                hook.got(new File(dir, name));
+            }
         }
     }
 

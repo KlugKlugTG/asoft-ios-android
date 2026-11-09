@@ -221,15 +221,26 @@ final class Guest {
         return b != null && new File(b).getName().equals(AOD26_BASE);
     }
 
+    /**
+     * What the phone's own setup (PhoneSetup26) leaves in files/ios26: one packed disk with the Always On Display
+     * patch, its trust cache and both trees, no root26r: every user disk goes on AOD26_BASE.
+     */
+    static final String[] PHONE_PARTS26 = {"bootkc", "sptm", "txm", DTREE26, DTREE26_AOD, AOD26_TC, "rd-shell.hfs", AOD26_BASE};
+
     static File dir26(Context c) {
         File d = new File(c.getFilesDir(), "ios26");
-        return new File(d, "root26r.qcow2").isFile() ? d : TEST26_DIR;
+        return new File(d, "root26r.qcow2").isFile() || new File(d, AOD26_BASE).isFile() ? d : TEST26_DIR;
+    }
+
+    /** iOS 26 as the phone's own setup made it (files/ios26/install.json). */
+    static boolean phoneMade26(File d) {
+        return new File(d, "install.json").isFile() && !new File(d, "root26r.qcow2").isFile();
     }
 
     /** The first of iOS 26's files this app cannot read, null when all are there. */
     static String missing26(Context c) {
         File d = dir26(c);
-        for (String p : PARTS26) {
+        for (String p : phoneMade26(d) ? PHONE_PARTS26 : PARTS26) {
             if (!new File(d, p).canRead()) {
                 return p;
             }
@@ -242,7 +253,7 @@ final class Guest {
     }
 
     /** Turnip (Mesa's Adreno Vulkan driver, with host-pointer import over KGSL) for the Vulkan loader. */
-    private static File writeVulkanIcd(Context c, File links) throws IOException {
+    static File writeVulkanIcd(Context c, File links) throws IOException {
         File d = new File(c.getFilesDir(), "vulkan");
         d.mkdirs();
         File json = new File(d, "turnip_icd.json");
@@ -398,16 +409,145 @@ final class Guest {
     }
 
     /**
-     * The device tree for the 2x screen: iOS 26's own with /chosen/display-scale 2 (a 32-byte property
-     * name, a 4-byte length, the value), written next to the app's files when missing or older.
+     * The guest's RAM in MiB, per OS, chosen under More (iOS 26 3 or 4 GiB; the watch 2 or 3 GiB). Unchosen:
+     * 4 / 3 GiB (the trees' own) on a phone with ~12 GB, 3 / 2 GiB on a smaller one (2 GiB slowed the watch's
+     * cold Settings from 5.5 to 27 s but left ~1.3 GB more to Android, WATCHOS.md). A save always loads with
+     * the RAM it was made with (savedRam), so a new size takes effect at the next full start.
      */
-    private static File dtree2x(Context c, File g, String tree) throws IOException {
-        File src = new File(g, tree);
-        File out = new File(c.getFilesDir(), tree + "-2x");
+    static final int[] RAM_CHOICES_26 = {3072, 4096}, RAM_CHOICES_WATCH = {2048, 3072};
+    // No 6 GB for iOS 26 yet: vresearch's framebuffer sits at 0x1c0000000, inside RAM above 5 GB (RAM starts at
+    // 0x80000000). On Windows reims then refuses the split RAM map and QEMU ends; on the phone it boots (6.0 GiB in
+    // vm_stat, 2026-11-09) but the guest treats the framebuffer's pages as RAM, and power off did not finish in 60 s.
+    // Comes back when QEMU puts the framebuffer past the end of RAM (WIN-LAUNCHER.md).
+
+    static int ramDefault(Context c, int forOs) {
+        boolean small = GpuCheck.ram(c) < 10_000_000_000L;
+        return forOs == WATCH ? (small ? 2048 : 3072) : (small ? 3072 : 4096);
+    }
+
+    static int ramMiB(Context c, int forOs) {
+        int mib = c.getSharedPreferences("guest", Context.MODE_PRIVATE).getInt(forOs == WATCH ? "watch-ram" : "ios26-ram", ramDefault(c, forOs));
+        for (int ok : forOs == WATCH ? RAM_CHOICES_WATCH : RAM_CHOICES_26) {
+            if (ok == mib) {
+                return mib;
+            }
+        }
+        return ramDefault(c, forOs);   // a size no longer offered (iOS 26's 6 GB)
+    }
+
+    static void setRamMiB(Context c, int forOs, int mib) {
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putInt(forOs == WATCH ? "watch-ram" : "ios26-ram", mib).apply();
+    }
+
+    /** The RAM (MiB) the running iOS 26 or watch booted with, or loaded a save of (kept with each save). */
+    private static volatile int bootRamMiB;
+
+    static int bootRamMiB() {
+        return bootRamMiB;
+    }
+
+    private static File savedRamFile(Context c, String tag) {
+        return new File(c.getFilesDir(), userPrefix(c) + tag + ".ram");
+    }
+
+    /** The RAM save @tag was made with; saves from before the setting (2026-11-09) ran on the trees' own size. */
+    private static int savedRam(Context c, String tag, int forOs) {
+        try {
+            return Integer.parseInt(new String(java.nio.file.Files.readAllBytes(savedRamFile(c, tag).toPath()),
+                    java.nio.charset.StandardCharsets.US_ASCII).trim());
+        } catch (IOException | NumberFormatException e) {
+            return forOs == WATCH ? 3072 : 4096;
+        }
+    }
+
+    /**
+     * @src with @mib of RAM (/chosen dram-size, the size in /memory reg, /product/util's base right after it:
+     * dt-phone.py --ram-gib) and, @twoX, /chosen/display-scale 2; written next to the app's files when missing or
+     * older. The tree itself is returned when nothing changes.
+     */
+    private static File tree(Context c, File src, int mib, boolean twoX) throws IOException {
+        byte[] b = java.nio.file.Files.readAllBytes(src.toPath());
+        long size = (long) mib << 20;
+        long[] at = adtRam(b, src.getName());
+        if (!twoX && at[3] == size) {
+            return src;
+        }
+        File out = new File(c.getFilesDir(), src.getName() + (twoX ? "-2x" : "") + (at[3] == size ? "" : "-" + mib + "m"));
         if (out.isFile() && out.lastModified() >= src.lastModified()) {
             return out;
         }
-        byte[] b = java.nio.file.Files.readAllBytes(src.toPath());
+        if (twoX) {
+            b = twoX(b, src.getName());
+        }
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        long base = bb.getLong((int) at[1]);
+        bb.putLong((int) at[0], size);
+        bb.putLong((int) at[1] + 8, size);
+        bb.putLong((int) at[2], base + size);
+        File tmp = new File(out.getPath() + ".tmp");
+        java.nio.file.Files.write(tmp.toPath(), b);
+        if (!tmp.renameTo(out)) {
+            throw new IOException("cannot write " + out);
+        }
+        return out;
+    }
+
+    /** Offsets of /chosen dram-size, /memory reg and /product/util reg in an Apple device tree, and the RAM size. */
+    private static long[] adtRam(byte[] b, String name) throws IOException {
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        long[] r = {-1, -1, -1, 0};
+        int end = adtWalk(bb, 0, "", r);
+        if (end != b.length || r[0] < 0 || r[1] < 0 || r[2] < 0) {
+            throw new IOException(name + ": no /chosen dram-size, /memory reg or /product/util reg");
+        }
+        r[3] = bb.getLong((int) r[0]);
+        return r;
+    }
+
+    private static int adtWalk(java.nio.ByteBuffer bb, int o, String path, long[] r) {
+        int np = bb.getInt(o), nc = bb.getInt(o + 4);
+        o += 8;
+        String nodeName = "?";
+        java.util.Map<String, Integer> props = new java.util.HashMap<>();
+        for (int i = 0; i < np; i++) {
+            byte[] n = new byte[32];
+            bb.position(o);
+            bb.get(n);
+            int z = 0;
+            while (z < 32 && n[z] != 0) {
+                z++;
+            }
+            String pn = new String(n, 0, z, java.nio.charset.StandardCharsets.US_ASCII);
+            int ln = bb.getInt(o + 32) & 0x7fffffff;
+            props.put(pn, o + 36);
+            if ("name".equals(pn)) {
+                int k = 0;
+                while (k < ln && bb.get(o + 36 + k) != 0) {
+                    k++;
+                }
+                byte[] v = new byte[k];
+                bb.position(o + 36);
+                bb.get(v);
+                nodeName = new String(v, java.nio.charset.StandardCharsets.US_ASCII);
+            }
+            o += 36 + ((ln + 3) & ~3);
+        }
+        String here = path.isEmpty() ? nodeName : path + "/" + nodeName;
+        if (nodeName.equals("chosen") && props.containsKey("dram-size")) {
+            r[0] = props.get("dram-size");
+        } else if (nodeName.equals("memory") && props.containsKey("reg")) {
+            r[1] = props.get("reg");
+        } else if (here.endsWith("/product/util") && props.containsKey("reg")) {
+            r[2] = props.get("reg");
+        }
+        for (int i = 0; i < nc; i++) {
+            o = adtWalk(bb, o, here, r);
+        }
+        return o;
+    }
+
+    /** The 2x screen's tree: /chosen/display-scale 2 (a 32-byte property name, a 4-byte length, the value). */
+    private static byte[] twoX(byte[] b, String tree) throws IOException {
         byte[] name = java.util.Arrays.copyOf("display-scale".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 32);
         int at = -1;
         for (int i = 0; i + 40 <= b.length; i += 4) {
@@ -427,12 +567,7 @@ final class Guest {
         }
         b[at + 36] = 2;
         b[at + 37] = b[at + 38] = b[at + 39] = 0;
-        File tmp = new File(out.getPath() + ".tmp");
-        java.nio.file.Files.write(tmp.toPath(), b);
-        if (!tmp.renameTo(out)) {
-            throw new IOException("cannot write " + out);
-        }
-        return out;
+        return b;
     }
 
     private static void ensureUserDisk(Context c, File g) throws IOException {
@@ -588,6 +723,7 @@ final class Guest {
                 savedLedsFile(c, o.tag).delete();
                 savedCpusFile(c, o.tag).delete();
                 savedClockFile(c, o.tag).delete();
+                savedRamFile(c, o.tag).delete();
                 if (d == null || !d.replace(" ", "").equals("{\"return\":\"\"}")) {
                     AppLog.note(c, "the older quick save " + o.tag + " stays until the next start: delvm " + d);
                 }
@@ -619,6 +755,7 @@ final class Guest {
         savedLedsFile(c, tag).delete();
         savedCpusFile(c, tag).delete();
         savedClockFile(c, tag).delete();
+        savedRamFile(c, tag).delete();
         Qmp q = qmp;
         if (running() && q != null) {
             String r = q.hmp("delvm " + tag, 60000);
@@ -835,7 +972,7 @@ final class Guest {
         userDisk(c, forOs).delete();
         String prefix = diskName(c, forOs) + ".";
         File[] f = c.getFilesDir().listFiles((d, n) -> n.startsWith(prefix)
-                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock")));
+                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock") || n.endsWith(".ram")));
         if (f != null) {
             for (File x : f) {
                 x.delete();
@@ -869,6 +1006,13 @@ final class Guest {
                 w.println(runningOs == WATCH ? WatchProfile.CLOCK : CLOCK_V1);
             } catch (IOException ignored) {
                 // then it counts as a save from before the clock fix
+            }
+            if (bootRamMiB > 0) {
+                try (PrintWriter w = new PrintWriter(new FileWriter(savedRamFile(c, tag)))) {
+                    w.println(bootRamMiB);
+                } catch (IOException ignored) {
+                    // then it loads with the trees' own size, which may not be its own
+                }
             }
         }
     }
@@ -1282,20 +1426,87 @@ final class Guest {
         return m;
     }
 
+    /**
+     * A boot the setup from Apple makes on a disk it is building (PhoneSetup26: iOS 26's first boot and its
+     * wallpaper boot, the watch's first boot), as the PC installer's Start-iOS26.ps1 -Keep / Start-watchOS.ps1
+     * -FirstBoot do: that disk itself (no user disk, no quick boot), the given kernel, trees and trust cache,
+     * and the guest's root shell on a UNIX socket (console.sock, logged to serial.txt) for the setup's checks.
+     */
+    static final class SetupBoot {
+        boolean watch;
+        File disk, bootkc, sptm, txm, dtree, tc, ramdisk;
+    }
+
+    /** The setup boot the next start26 makes, or null for the user's own iOS. */
+    private static volatile SetupBoot setupBoot;
+
+    /** Starts @b (blocking until QEMU is up, as start does); the setup ends it with stopAndWait or a QMP quit. */
+    static synchronized void startSetup(Context c, SetupBoot b) throws IOException {
+        if (running()) {
+            throw new IOException("iOS is running: close it first");
+        }
+        if (qmp != null) {
+            qmp.close();
+            qmp = null;
+        }
+        File links = Emu.linkLibraries(c);
+        writeResolvConf(c);
+        setupBoot = b;
+        try {
+            start26(c, links, null);
+        } finally {
+            setupBoot = null;
+        }
+    }
+
+    /** The memfd iOS 26's frames come in (this process's descriptor), -1 before a start. */
+    private static volatile int frameFd26 = -1;
+
+    /**
+     * How many different colours a sample of the running iOS 26's or watch's frame has (every 7th pixel of
+     * every 7th row), -1 when it cannot be read: the setup tells the Apple logo (a few) from a face or a
+     * home screen (hundreds), as the PC installer tells them by the size of a screendump.
+     */
+    static int frameVariety() {
+        if (frameFd26 < 0) {
+            return -1;
+        }
+        // (pread on the memfd: /proc/self/fd/N of a memfd does not open for an app)
+        int w = fb26W, h = fb26H;
+        java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+        byte[] row = new byte[w * 4];
+        for (int y = 0; y < h; y += 7) {
+            if (Render.readFrame((long) y * w * 4, row, row.length) != row.length) {
+                return -1;
+            }
+            for (int x = 0; x < w; x += 7) {
+                seen.add((row[x * 4] & 0xf0) << 8 | (row[x * 4 + 1] & 0xf0) << 4 | (row[x * 4 + 2] & 0xf0));
+            }
+        }
+        return seen.size();
+    }
+
+    static File consoleSocket(Context c) {
+        return new File(runDir(c), "console.sock");
+    }
+
     /** iOS 26, or watchOS on the same machine (selected WATCH: WatchProfile's files, screen, CPU and buttons). */
     private static void start26(Context c, File links, String loadTag) throws IOException {
-        boolean watch = selected(c) == WATCH;
+        SetupBoot sb = setupBoot;
+        boolean watch = sb != null ? sb.watch : selected(c) == WATCH;
         int os = watch ? WATCH : IOS26;
         runningOs = os;
         appContext = c.getApplicationContext();
         File g = watch ? WatchProfile.dir(c) : dir26(c);
         File run = runDir(c);
-        String miss = watch ? WatchProfile.missing(c) : missing26(c);
+        String miss = sb != null ? null : watch ? WatchProfile.missing(c) : missing26(c);
         if (miss != null) {
             throw new IOException(osName(os) + " is not on this phone: no " + new File(g, miss));
         }
-        ensureUserDisk(c, g);
-        loadTag = dropStaleQuick(c, os, loadTag);
+        if (sb == null) {
+            ensureUserDisk(c, g);
+            loadTag = dropStaleQuick(c, os, loadTag);
+        }
         // the clock check: iOS 26's after a phone restart, the watch's counter mode (unloadable26)
         String cannot = loadTag == null ? null : unloadable26(c, loadTag);
         if (cannot != null) {
@@ -1305,8 +1516,10 @@ final class Guest {
             }
             loadTag = null;
         }
-        checkRoom(c, os);
-        checkDisk(c, os);
+        if (sb == null) {
+            checkRoom(c, os);
+            checkDisk(c, os);
+        }
         List<Snap> saves = loadTag == null ? new ArrayList<>() : snapshots(c, os);
         resumed = false;
         StringBuilder tags = new StringBuilder();
@@ -1332,12 +1545,12 @@ final class Guest {
         File icd = writeVulkanIcd(c, links);
         List<String> extra = new ArrayList<>();
         // ios26.txt (debug builds) is iOS 26's: the watch takes none of it
-        Map<String, String> ov = watch ? new java.util.HashMap<>() : overrides26(c, extra);
+        Map<String, String> ov = watch || sb != null ? new java.util.HashMap<>() : overrides26(c, extra);
         lastOverrides26 = ov;
         if (!ov.isEmpty() || !extra.isEmpty()) {
             AppLog.note(c, "ios26.txt: " + ov + " " + extra);
         }
-        boolean twoX = !watch && scale26(c) == 2;
+        boolean twoX = !watch && sb == null && scale26(c) == 2;
         fb26W = watch ? WatchProfile.FB_W : twoX ? FB26_W * 2 / 3 : FB26_W;     // 786x1704 @2x
         fb26H = watch ? WatchProfile.FB_H : twoX ? FB26_H * 2 / 3 : FB26_H;
         String fb = ov.get("fb");
@@ -1349,30 +1562,41 @@ final class Guest {
         if (frameFd < 0) {
             throw new IOException("no memfd for iOS 26's frames");
         }
+        frameFd26 = frameFd;
         // a disk on the AOD base gets the AOD tree and trust cache; one on root26r keeps the plain ones (the AOD
         // tree over an unpatched libMobileGestalt takes the hardware flipbook, which kills backboardd)
-        boolean aod = !watch && aodDisk(userDisk(c, IOS26)) && aodFiles(g);
+        boolean aod = sb == null && !watch && aodDisk(userDisk(c, IOS26)) && aodFiles(g);
         aodRunning = aod;
         String tree = aod ? DTREE26_AOD : DTREE26;
-        String dtree = watch ? WatchProfile.part(c, WatchProfile.DTREE).getPath()
-                : ov.containsKey("dtree") ? new File(g, ov.get("dtree")).getPath()
-                : twoX ? dtree2x(c, g, tree).getPath() : new File(g, tree).getPath();
-        String tc = watch ? WatchProfile.part(c, WatchProfile.TC).getPath() : new File(g, aod ? AOD26_TC : "root26m.tc").getPath();
+        // the RAM: a save's own (it only loads into the size it was made with), else the one chosen under More
+        String dtree, tc;
+        if (sb != null) {
+            dtree = sb.dtree.getPath();     // the setup's own trees, their own RAM
+            tc = sb.tc.getPath();
+            bootRamMiB = 0;
+        } else {
+            int ram = resumed ? savedRam(c, loadTag, os) : ramMiB(c, os);
+            bootRamMiB = ram;
+            dtree = ov.containsKey("dtree") && !watch ? new File(g, ov.get("dtree")).getPath()
+                    : tree(c, watch ? WatchProfile.part(c, WatchProfile.DTREE) : new File(g, tree), ram, twoX).getPath();
+            tc = watch ? WatchProfile.part(c, WatchProfile.TC).getPath() : new File(g, aod ? AOD26_TC : "root26m.tc").getPath();
+            AppLog.note(c, "guest RAM " + ram + " MiB" + (resumed ? " (the save's)" : ""));
+        }
         AppLog.note(c, "screen " + fb26W + "x" + fb26H + (twoX ? " (2x)" : "") + ", device tree " + dtree
                 + (aod ? ", Always On Display (" + AOD26_BASE + ")" : ""));
         List<String> cmd = new ArrayList<>(List.of(Emu.qemu26Path(c), "-name", watch ? "ASoftware watchOS" : "ASoftware iOS 26",
                 "-M", watch ? WatchProfile.machine() : "vresearch,fb=" + fb26W + "x" + fb26H
                         + ",unauth-root=on,pvg=reims,aks-stub=on,amfi-lc-off=on,aks-crypt=on,acm-stub=on,hfs-dp-stub=on",
-                "-bootkc", (watch ? WatchProfile.part(c, WatchProfile.KERNEL) : new File(g, "bootkc")).getPath(),
-                "-sptm", (watch ? WatchProfile.part(c, "sptm") : new File(g, "sptm")).getPath(),
-                "-txm", (watch ? WatchProfile.part(c, "txm") : new File(g, "txm")).getPath(), "-dtree", dtree,
-                "-tc", tc, "-ramdisk", (watch ? WatchProfile.part(c, "rd-shell.hfs") : new File(g, "rd-shell.hfs")).getPath(),
+                "-bootkc", (sb != null ? sb.bootkc : watch ? WatchProfile.part(c, WatchProfile.KERNEL) : new File(g, "bootkc")).getPath(),
+                "-sptm", (sb != null ? sb.sptm : watch ? WatchProfile.part(c, "sptm") : new File(g, "sptm")).getPath(),
+                "-txm", (sb != null ? sb.txm : watch ? WatchProfile.part(c, "txm") : new File(g, "txm")).getPath(), "-dtree", dtree,
+                "-tc", tc, "-ramdisk", (sb != null ? sb.ramdisk : watch ? WatchProfile.part(c, "rd-shell.hfs") : new File(g, "rd-shell.hfs")).getPath(),
                 "-args", "serial=3 -v debug=0x14e cpus=" + smp + " rd=disk0s1 wdt=-1 keepsyms=1 -noprogress "
                         + "launchd_unsecure_cache=1 launchd_disable_all_timeouts=1 aks-endpoint=0 cpu_boot_timeout_secs=30",
                 "-display", "none", "-monitor", "none", "-parallel", "none",
                 // ios26.txt console=socket (debug builds): the guest's root shell (bash on the serial console) on
                 // files/run/console.sock, for adb (run-as + toybox nc -U), still logged to serial.txt
-                "-chardev", "socket".equals(ov.get("console"))
+                "-chardev", sb != null || "socket".equals(ov.get("console"))
                         ? "socket,id=con,path=" + new File(run, "console.sock").getPath() + ",server=on,wait=off,logfile="
                                 + new File(run, "serial.txt").getPath()
                         : "file,id=con,path=" + new File(run, "serial.txt").getPath(),
@@ -1384,7 +1608,7 @@ final class Guest {
                 // Before QEMU's alignment fix (block/file-posix.c, 2026-11-05) a third of iOS 26's writes
                 // failed this way: this phone's f2fs with inline encryption fails a buffer that is not
                 // 4 KiB-aligned with EIO, which QEMU's probe took for "aligned"; since then 0 of 2,833
-                "-drive", "file=" + userDisk(c, os).getPath() + ",if=none,id=root,cache=" + ov.getOrDefault("cache", "none")
+                "-drive", "file=" + (sb != null ? sb.disk : userDisk(c, os)).getPath() + ",if=none,id=root,cache=" + ov.getOrDefault("cache", "none")
                         + ",discard=unmap,format=qcow2",
                 "-object", "iothread,id=disk",
                 // ios26.txt disk-iothread=on: the disk's requests and completions on their own thread, off the
@@ -1451,7 +1675,11 @@ final class Guest {
         for (Map.Entry<String, String> e : env.entrySet()) {
             envp.add(e.getKey() + "=" + e.getValue());
         }
-        setDirty(c, os, true);
+        if (sb == null) {
+            setDirty(c, os, true);
+        } else {
+            new File(run, "console.sock").delete();
+        }
         pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]),
                 new File(run, "qemu-stderr.txt").getPath());
         if (pid < 0) {

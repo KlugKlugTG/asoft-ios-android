@@ -37,7 +37,9 @@ public class MainActivity extends Activity {
     private TextView stateWatch, infoWatch;
     private Button primaryWatch;
     private LinearLayout more, running;
-    private TextView freeRam, powerWarn, scale26Row, watchBootRow, watchEraseRow;
+    private TextView freeRam, powerWarn, scale26Row, ram26Row, ramWatchRow, watchBootRow, watchEraseRow;
+    private LinearLayout updateBar;
+    private TextView updateText, updateRow;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -147,6 +149,8 @@ public class MainActivity extends Activity {
                 + (WatchProfile.available(this) ? ", and watchOS," : "") + " on this phone", 16, 0xff9a9a9a)
                 .setPadding(0, 0, 0, 48);
 
+        addUpdateBar();
+
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(48, 40, 48, 40);
@@ -248,7 +252,12 @@ public class MainActivity extends Activity {
                 .show());
         LinearLayout ios = group(more, 16);
         freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
-        row(ios, "Set up iOS 16 again (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
+        updateRow = row(ios, "", Color.WHITE, v -> {
+            UpdateCheck.setEnabled(this, !UpdateCheck.enabled(this));
+            showUpdate();
+            UpdateCheck.check(this, this::showUpdate);
+        });
+        row(ios, "Set up: iOS 16, iOS 26 and watchOS (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
         row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
                 Guest.select(this, Guest.IOS16);
@@ -264,6 +273,8 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, ScreenActivity.class));
         }));
         scale26Row = row(ios, "", Color.WHITE, v -> chooseScale26());
+        ram26Row = row(ios, "", Color.WHITE, v -> chooseRam(Guest.IOS26));
+        ramWatchRow = row(ios, "", Color.WHITE, v -> chooseRam(Guest.WATCH));
         watchBootRow = row(ios, "Boot watchOS, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
                 Guest.select(this, Guest.WATCH);
@@ -347,7 +358,52 @@ public class MainActivity extends Activity {
             registerReceiver(powerChanged, f);
         }
         refresh();
+        showUpdate();
+        UpdateCheck.check(this, this::showUpdate);
         powerWarn.postDelayed(powerRecheck, 3_000);
+    }
+
+    /** The notice that a newer release is out, hidden until the check says so. */
+    private void addUpdateBar() {
+        updateBar = new LinearLayout(this);
+        updateBar.setOrientation(LinearLayout.VERTICAL);
+        updateBar.setPadding(48, 36, 48, 20);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff10243a);
+        bg.setCornerRadius(36);
+        updateBar.setBackground(bg);
+        updateText = text(updateBar, "", 15, 0xff64b5ff);
+        updateText.setPadding(0, 0, 0, 12);
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        button(buttons, "Release page", v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateCheck.RELEASE_PAGE)));
+            } catch (android.content.ActivityNotFoundException e) {
+                Toast.makeText(this, UpdateCheck.RELEASE_PAGE, Toast.LENGTH_LONG).show();
+            }
+        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        button(buttons, "Dismiss", v -> {
+            String tag = UpdateCheck.toShow(this);
+            if (tag != null) {
+                UpdateCheck.dismiss(this, tag);
+            }
+            showUpdate();
+        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        updateBar.addView(buttons);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = 24;
+        box.addView(updateBar, lp);
+        updateBar.setVisibility(View.GONE);
+    }
+
+    private void showUpdate() {
+        String tag = UpdateCheck.toShow(this);
+        updateBar.setVisibility(tag == null ? View.GONE : View.VISIBLE);
+        if (tag != null) {
+            updateText.setText(tag + " is out. This app is " + UpdateCheck.version(this) + ".");
+        }
+        updateRow.setText("Check for updates: " + (UpdateCheck.enabled(this) ? "On" : "Off"));
     }
 
     @Override
@@ -395,6 +451,8 @@ public class MainActivity extends Activity {
     private void primary26Action() {
         if (Guest.available26(this)) {
             open(Guest.IOS26);
+        } else {
+            startActivity(new Intent(this, SetupActivity.class));     // iOS 26 from Apple (Setup26Screen)
         }
     }
 
@@ -444,21 +502,70 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private String ramRowText(int os) {
+        return (os == Guest.WATCH ? "watchOS's memory: " : "iOS 26's memory: ") + Guest.ramMiB(this, os) / 1024 + " GB"
+                + (Guest.ramMiB(this, os) == Guest.ramDefault(this, os) ? " (default for this phone)" : "");
+    }
+
+    /**
+     * The guest's RAM (Guest.ramMiB): less leaves Android more, so it closes iOS less often on a phone with
+     * less RAM; more keeps more apps alive inside iOS. A save loads with the size it was made with, so a new
+     * size takes effect at the next full start.
+     */
+    private void chooseRam(int os) {
+        int[] ch = os == Guest.WATCH ? Guest.RAM_CHOICES_WATCH : Guest.RAM_CHOICES_26;
+        int now = Guest.ramMiB(this, os), def = Guest.ramDefault(this, os);
+        String[] names = new String[ch.length];
+        int pick = 0;
+        for (int i = 0; i < ch.length; i++) {
+            names[i] = ch[i] / 1024 + " GB" + (ch[i] == def ? " (default for this phone)" : "");
+            if (ch[i] == now) {
+                pick = i;
+            }
+        }
+        int[] chosen = {pick};
+        new AlertDialog.Builder(this)
+                // (a message would hide the list: the explanation is in the title and the toast)
+                .setTitle(String.format(java.util.Locale.ROOT, "%s's memory (this phone: %.1f GB; less leaves Android more)",
+                        os == Guest.WATCH ? "watchOS" : "iOS 26", GpuCheck.ram(this) / 1e9))
+                .setSingleChoiceItems(names, pick, (d, w) -> chosen[0] = w)
+                .setPositiveButton("Use", (d, w) -> {
+                    boolean changed = ch[chosen[0]] != now;
+                    Guest.setRamMiB(this, os, ch[chosen[0]]);
+                    refresh();
+                    if (changed) {
+                        Toast.makeText(this, "From the next full start (Boot … not from the saved state): a save opens with "
+                                + "the memory it was made with", Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     /** iOS 26's card: hidden in a release build until its files are on the phone. */
     private void refresh26() {
         boolean debug = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         String missing = Guest.missing26(this);
-        card26.setVisibility(missing == null || debug ? View.VISIBLE : View.GONE);
+        // (shown without its files too: its button leads to Set up, which installs it from Apple)
+        card26.setVisibility(View.VISIBLE);
         boolean twoX = Guest.scale26(this) == 2;
         if (scale26Row != null) {
             scale26Row.setText("iOS 26's screen: " + (twoX ? "2x (faster)" : "3x (sharp)"));
             scale26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
         }
+        if (ram26Row != null) {
+            ram26Row.setText(ramRowText(Guest.IOS26));
+            ram26Row.setVisibility(missing == null ? View.VISIBLE : View.GONE);
+        }
         boolean up = Guest.running() && Guest.os(this) == Guest.IOS26;
         if (missing != null) {
-            state26.setText("iOS 26 is not on this phone");
-            info26.setText("No " + new File(Guest.dir26(this), missing) + " (or this app cannot read it).");
-            primary26.setVisibility(View.GONE);
+            boolean busy = SetupService.busy() && "a26".equals(SetupService.state.target);
+            state26.setText(busy ? "iOS 26 / watchOS are being set up" : "iOS 26 is not on this phone");
+            info26.setText(busy ? SetupService.state.text
+                    : "Set up downloads it from Apple (about 10 GB) and builds it on this phone, after a check of its GPU."
+                    + (debug ? " (No " + new File(Guest.dir26(this), missing) + ".)" : ""));
+            primary26.setText(busy ? "Open Set up" : "Set up iOS 26 or watchOS");
+            primary26.setVisibility(View.VISIBLE);
             return;
         }
         primary26.setVisibility(View.VISIBLE);
@@ -498,6 +605,8 @@ public class MainActivity extends Activity {
         cardWatch.setVisibility(have ? View.VISIBLE : View.GONE);
         watchBootRow.setVisibility(have ? View.VISIBLE : View.GONE);
         watchEraseRow.setVisibility(have ? View.VISIBLE : View.GONE);
+        ramWatchRow.setText(ramRowText(Guest.WATCH));
+        ramWatchRow.setVisibility(have ? View.VISIBLE : View.GONE);
         if (!have) {
             return;
         }

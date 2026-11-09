@@ -119,6 +119,19 @@ Java_com_asoft_ios_Render_createFrameMemory(JNIEnv *env, jclass cls, jlong size)
     return frame_fd;
 }
 
+/* @len bytes of the frame memfd from @off into @out (the setup's look at the screen); bytes read, or -1 */
+JNIEXPORT jint JNICALL
+Java_com_asoft_ios_Render_readFrame(JNIEnv *env, jclass cls, jlong off, jbyteArray out, jint len)
+{
+    if (frame_fd < 0) {
+        return -1;
+    }
+    jbyte *b = (*env)->GetByteArrayElements(env, out, NULL);
+    ssize_t n = pread(frame_fd, b, (size_t)len, (off_t)off);
+    (*env)->ReleaseByteArrayElements(env, out, b, 0);
+    return (jint)n;
+}
+
 /*
  * fork + exec of QEMU with @argv and @envp, stdout and stderr to @log, keeping ram_fd.
  * Java's ProcessBuilder closes every descriptor but 0-2 in the child, hence this.

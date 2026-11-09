@@ -11,7 +11,8 @@ import java.util.Map;
 
 /**
  * The helper VM's job-run.sh disks: "in" is a tar the host makes (the job's script and files), "out" a
- * tar the job writes from its first byte ("ASOFT: out BYTES" says how long). POSIX ustar, regular files.
+ * tar the job writes from its first byte ("ASOFT: out BYTES" says how long). POSIX ustar, regular files
+ * (and GNU tar's long names, which job-run.sh's tar writes for paths over 100 bytes).
  */
 final class TarIo {
     private TarIo() {}
@@ -113,6 +114,7 @@ final class TarIo {
         byte[] buf = new byte[1 << 20];
         try (InputStream s = new java.io.BufferedInputStream(new FileInputStream(in), 1 << 20)) {
             long at = 0;
+            String longName = null;          // GNU tar's ././@LongLink record: the next entry's name
             while (at + 512 <= len) {
                 readFully(s, h);
                 at += 512;
@@ -127,11 +129,27 @@ final class TarIo {
                 if (!prefix.isEmpty()) {
                     name = prefix + "/" + name;
                 }
+                if (longName != null) {
+                    name = longName;
+                    longName = null;
+                }
                 long size = Long.parseLong(field(h, 124, 12).trim().isEmpty() ? "0" : field(h, 124, 12).trim(), 8);
                 char type = (char) h[156];
                 long padded = (size + 511) & ~511L;
                 if (name.contains("..") || name.startsWith("/")) {
                     throw new IOException("unsafe name in the tar: " + name);
+                }
+                if (type == 'L') {
+                    byte[] ln = new byte[(int) Math.min(size, 4096)];
+                    readFully(s, ln);
+                    skip(s, padded - ln.length);
+                    at += padded;
+                    int z = 0;
+                    while (z < ln.length && ln[z] != 0) {
+                        z++;
+                    }
+                    longName = new String(ln, 0, z, StandardCharsets.UTF_8);
+                    continue;
                 }
                 if (type == '0' || type == 0) {
                     File f = new File(dir, name);
