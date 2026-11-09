@@ -38,6 +38,8 @@ public class MainActivity extends Activity {
     private Button primaryWatch;
     private LinearLayout more, running;
     private TextView freeRam, powerWarn, scale26Row, ram26Row, ramWatchRow, watchBootRow, watchEraseRow;
+    private LinearLayout updateBar;
+    private TextView updateText, updateRow;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -147,6 +149,8 @@ public class MainActivity extends Activity {
                 + (WatchProfile.available(this) ? ", and watchOS," : "") + " on this phone", 16, 0xff9a9a9a)
                 .setPadding(0, 0, 0, 48);
 
+        addUpdateBar();
+
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(48, 40, 48, 40);
@@ -248,6 +252,11 @@ public class MainActivity extends Activity {
                 .show());
         LinearLayout ios = group(more, 16);
         freeRam = row(ios, "", Color.WHITE, v -> toggleFreeRam());
+        updateRow = row(ios, "", Color.WHITE, v -> {
+            UpdateCheck.setEnabled(this, !UpdateCheck.enabled(this));
+            showUpdate();
+            UpdateCheck.check(this, this::showUpdate);
+        });
         row(ios, "Set up: iOS 16, iOS 26 and watchOS (from Apple, or from the PC)", Color.WHITE, v -> startActivity(new Intent(this, SetupActivity.class)));
         row(ios, "Boot iOS 16, not from the saved state", Color.WHITE, v -> whenPowerOk(() -> {
             if (!Guest.running()) {
@@ -349,7 +358,52 @@ public class MainActivity extends Activity {
             registerReceiver(powerChanged, f);
         }
         refresh();
+        showUpdate();
+        UpdateCheck.check(this, this::showUpdate);
         powerWarn.postDelayed(powerRecheck, 3_000);
+    }
+
+    /** The notice that a newer release is out, hidden until the check says so. */
+    private void addUpdateBar() {
+        updateBar = new LinearLayout(this);
+        updateBar.setOrientation(LinearLayout.VERTICAL);
+        updateBar.setPadding(48, 36, 48, 20);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff10243a);
+        bg.setCornerRadius(36);
+        updateBar.setBackground(bg);
+        updateText = text(updateBar, "", 15, 0xff64b5ff);
+        updateText.setPadding(0, 0, 0, 12);
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        button(buttons, "Release page", v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateCheck.RELEASE_PAGE)));
+            } catch (android.content.ActivityNotFoundException e) {
+                Toast.makeText(this, UpdateCheck.RELEASE_PAGE, Toast.LENGTH_LONG).show();
+            }
+        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        button(buttons, "Dismiss", v -> {
+            String tag = UpdateCheck.toShow(this);
+            if (tag != null) {
+                UpdateCheck.dismiss(this, tag);
+            }
+            showUpdate();
+        }).setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        updateBar.addView(buttons);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = 24;
+        box.addView(updateBar, lp);
+        updateBar.setVisibility(View.GONE);
+    }
+
+    private void showUpdate() {
+        String tag = UpdateCheck.toShow(this);
+        updateBar.setVisibility(tag == null ? View.GONE : View.VISIBLE);
+        if (tag != null) {
+            updateText.setText(tag + " is out. This app is " + UpdateCheck.version(this) + ".");
+        }
+        updateRow.setText("Check for updates: " + (UpdateCheck.enabled(this) ? "On" : "Off"));
     }
 
     @Override

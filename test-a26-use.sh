@@ -27,7 +27,8 @@ UPMIN=120; [ "$OS" = watch ] && UPMIN=20
 name=$([ "$OS" = watch ] && echo watchOS || echo "iOS 26")
 
 start() {   # start TAG: from the home screen, until the guest draws more than its logo (or 25 min)
-    adb shell "am start -n $PKG/com.asoft.ios.MainActivity" > /dev/null 2>&1
+    # clear-top: Set up may still be open above the home screen, and the guard would wait for the home screen for ever
+    adb shell "am start --activity-clear-top -n $PKG/com.asoft.ios.MainActivity" > /dev/null 2>&1
     TOP="$P/com[.]asoft[.]ios[.]MainActivity"; nap 3
     local n0; n0=$(applog | wc -l)
     tap_text "Start $name" || { echo "no Start $name"; exit 1; }
