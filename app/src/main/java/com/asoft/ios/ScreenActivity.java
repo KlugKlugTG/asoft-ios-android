@@ -187,7 +187,7 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         renderThread = new HandlerThread("render");
         renderThread.start();
         render = new Handler(renderThread.getLooper());
-        if (!Guest.running()) {
+        if (!Guest.running() && !"preparing".equals(Guest.state)) {     // preparing: a start is on its way
             GuestService.start(this);
         }
         registerReceiver(phoneScreenOff, new android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF));
@@ -204,7 +204,7 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
     @Override
     protected void onNewIntent(android.content.Intent i) {
         super.onNewIntent(i);
-        if (!Guest.running() && !Guest.saving() && !closing) {
+        if (!Guest.running() && !Guest.saving() && !closing && !"preparing".equals(Guest.state)) {
             restart.setVisibility(View.GONE);
             status.setText("starting");
             GuestService.start(this);
@@ -864,11 +864,16 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
             }
         } else if ("resuming".equals(Guest.state) || "switching".equals(Guest.state)) {
             status.setText("Loading the saved " + Guest.osName(Guest.os(this)) + "…");
+        } else if ("preparing".equals(Guest.state)) {
+            // a start's own step before QEMU runs (Guest.fitScreen26): not "stopped", no Start again button
+            String what = Guest.preparing;
+            status.setText(what == null ? "starting" : what);
+            restart.setVisibility(View.GONE);
         } else if (!closing && status.getText().length() > 0 && fbPid == Guest.pid(this)
                 && ("running".equals(Guest.state) || "booting".equals(Guest.state))) {
             status.setText("");
         }
-        if (!Guest.running() && !"switching".equals(Guest.state)) {
+        if (!Guest.running() && !"switching".equals(Guest.state) && !"preparing".equals(Guest.state)) {
             if (now - lastTry > 1000) {
                 lastTry = now;
                 String name = Guest.osName(Guest.os(this));

@@ -306,6 +306,8 @@ final class Guest {
     private static int pid = -1;
     private static volatile Qmp qmp;
     static volatile String state = "stopped";
+    /** What a start does before QEMU runs when it takes a while (state "preparing"), for the screen; else null. */
+    static volatile String preparing;
     /** True when this QEMU was started from the saved state. */
     static volatile boolean resumed;
     private static final java.util.concurrent.atomic.AtomicBoolean saving = new java.util.concurrent.atomic.AtomicBoolean();
@@ -615,6 +617,45 @@ final class Guest {
             u.delete();
             throw new IOException("qemu-img create: " + r[1].trim());
         }
+        if (os(c) == IOS26) {
+            Screen26.forget(c, diskName(c, IOS26));     // a new disk: its cache is the installed disk's (fitScreen26)
+        }
+    }
+
+    /**
+     * iOS 26's disk and the screen it is about to start at (Screen26): a 2x disk whose MobileGestalt cache has not
+     * been looked at with this build goes through the helper VM once, about half a minute. A cache of another
+     * screen is moved aside there; the quick saves then hold iOS as it ran with it, and loading one would bring
+     * the cache back with the rest of the disk, so they go and iOS boots. A 3x disk has the installed disk's own
+     * screen (the setup and a PC boot iOS at 3x only). Returns the state to load, or null for a boot.
+     */
+    private static String fitScreen26(Context c, String loadTag) throws IOException {
+        boolean twoX = scale26(c) == 2;
+        int w = twoX ? FB26_W * 2 / 3 : FB26_W, h = twoX ? FB26_H * 2 / 3 : FB26_H;
+        String disk = diskName(c, IOS26);
+        if (Screen26.fits(c, disk, w)) {
+            return loadTag;
+        }
+        if (!twoX) {
+            Screen26.mark(c, disk, w);
+            return loadTag;
+        }
+        String before = state;
+        preparing = "Setting iOS 26 up for the 2x screen (once, about half a minute)…";
+        state = "preparing";
+        try {
+            if (Screen26.fit(c, userDisk(c, IOS26), w, h)) {
+                String why = dropQuick(c);
+                AppLog.note(c, "screen26: the quick saves were made with the other screen's cache: "
+                        + (why == null ? "deleted" : "not loaded (" + why + ")") + "; booting");
+                loadTag = null;
+            }
+            Screen26.mark(c, disk, w);
+        } finally {
+            state = before;
+            preparing = null;
+        }
+        return loadTag;
     }
 
     /** One saved state (qcow2 internal snapshot) in the user disk. */
@@ -1328,6 +1369,26 @@ final class Guest {
         }
     }
 
+    private static final Object PREPARING = new Object();
+
+    /**
+     * What a start does before start(), off this class's lock: the screens ask running() many times a second
+     * and would stand still behind a start that held the lock for half a minute. That is iOS 26's 2x disk and
+     * its screen (fitScreen26, the state "preparing" meanwhile); start26 does the same itself for a start that
+     * did not come through here. Returns the state to load, or null for a boot.
+     */
+    static String prepare(Context c, String loadTag) throws IOException {
+        synchronized (PREPARING) {
+            if (setupBoot != null || running() || selected(c) != IOS26 || scale26(c) != 2
+                    || Screen26.fits(c, diskName(c, IOS26), FB26_W * 2 / 3) || missing26(c) != null) {
+                return loadTag;
+            }
+            ensureUserDisk(c, dir26(c));
+            checkDisk(c, IOS26);
+            return fitScreen26(c, loadTag);
+        }
+    }
+
     /** Starts iOS: from the saved state @loadTag when there is one (QUICK: quick boot), else a boot. */
     static synchronized void start(Context c, String loadTag) throws IOException {
         resumed = false;    // until this start says otherwise: the service reads it after
@@ -1593,6 +1654,9 @@ final class Guest {
         if (sb == null) {
             checkRoom(c, os);
             checkDisk(c, os);
+            if (!watch) {
+                loadTag = fitScreen26(c, loadTag);
+            }
         }
         List<Snap> saves = loadTag == null ? new ArrayList<>() : snapshots(c, os);
         resumed = false;
@@ -1602,6 +1666,11 @@ final class Guest {
             tags.append(tags.length() > 0 ? ", " : "").append(s.tag);
         }
         loadedTag = resumed ? loadTag : null;
+        if (resumed && !watch && sb == null && !isQuick(loadTag)) {
+            // a save the user named takes the disk back to its day, MobileGestalt cache and all: maybe one made
+            // before the cache was looked at, so it is looked at again before the next boot (fitScreen26)
+            Screen26.forget(c, diskName(c, IOS26));
+        }
         AppLog.keepRunLogs(c);
         AppLog.note(c, "start " + osName(os) + " from " + g + ": wanted " + (loadTag == null ? "a boot" : loadTag) + ", saves ["
                 + tags + "] -> " + (resumed ? "-loadvm " + loadTag : "boot"));

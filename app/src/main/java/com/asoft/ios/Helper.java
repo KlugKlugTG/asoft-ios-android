@@ -31,12 +31,19 @@ final class Helper {
         final File file;
         final String format;
         final boolean readOnly;
+        /** A disk that is somebody's (a user disk): its writes are flushed, as when iOS itself runs on it. */
+        final boolean flushed;
 
         Disk(String serial, File file, String format, boolean readOnly) {
+            this(serial, file, format, readOnly, false);
+        }
+
+        Disk(String serial, File file, String format, boolean readOnly, boolean flushed) {
             this.serial = serial;
             this.file = file;
             this.format = format;
             this.readOnly = readOnly;
+            this.flushed = flushed;
         }
     }
 
@@ -178,7 +185,7 @@ final class Helper {
             // cache=unsafe: no flushes while a disk is built; a crash means building it again anyway
             cmd.add("-drive");
             cmd.add("file=" + escape(d.file.getPath()) + ",format=" + d.format + ",if=none,id=" + d.serial
-                    + (d.readOnly ? ",readonly=on" : ",cache=unsafe"));
+                    + (d.readOnly ? ",readonly=on" : d.flushed ? ",cache=writeback" : ",cache=unsafe"));
             cmd.add("-device");
             cmd.add("virtio-blk-device,drive=" + d.serial + ",serial=" + d.serial);
         }
