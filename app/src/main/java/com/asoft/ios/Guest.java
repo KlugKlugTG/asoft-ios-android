@@ -1662,12 +1662,11 @@ final class Guest {
                 "-args", "serial=3 -v debug=0x14e cpus=" + smp + " rd=disk0s1 wdt=-1 keepsyms=1 -noprogress "
                         + "launchd_unsecure_cache=1 launchd_disable_all_timeouts=1 aks-endpoint=0 cpu_boot_timeout_secs=30",
                 "-display", "none", "-monitor", "none", "-parallel", "none",
-                // ios26.txt console=socket (debug builds): the guest's root shell (bash on the serial console) on
-                // files/run/console.sock, for adb (run-as + toybox nc -U), still logged to serial.txt
-                "-chardev", sb != null || "socket".equals(ov.get("console"))
-                        ? "socket,id=con,path=" + new File(run, "console.sock").getPath() + ",server=on,wait=off,logfile="
-                                + new File(run, "serial.txt").getPath()
-                        : "file,id=con,path=" + new File(run, "serial.txt").getPath(),
+                // the guest's root shell (bash on the serial console) on files/run/console.sock, still logged to
+                // serial.txt: the setup's commands, Turn off's sync (powerOff), and adb (run-as + toybox nc -U). With no
+                // client QEMU drops the console's output there (wait=off), so nothing waits on it
+                "-chardev", "socket,id=con,path=" + new File(run, "console.sock").getPath() + ",server=on,wait=off,logfile="
+                        + new File(run, "serial.txt").getPath(),
                 "-serial", "chardev:con",
                 "-d", "guest_errors,unimp", "-D", new File(run, "qemu.log").getPath(),
                 "-cpu", watch ? WatchProfile.CPU : ov.getOrDefault("cpu", CPU26),
@@ -1851,10 +1850,11 @@ final class Guest {
     }
 
     /**
-     * Turn off without a save: iOS's own shutdown through QEMU's power key (system_powerdown;
+     * Turn off without a save. iOS 16: iOS's own shutdown through QEMU's power key (system_powerdown;
      * xnu 0100: every process gets SIGTERM, the disks are synced and unmounted, then PSCI
-     * SYSTEM_OFF ends QEMU), as holding an iPhone's side button and sliding does. At most 60 s,
-     * then QEMU is stopped. The quick-boot state stays, marked stale: never loaded by itself (that would put
+     * SYSTEM_OFF ends QEMU), as holding an iPhone's side button and sliding does; at most 60 s,
+     * then QEMU is stopped. iOS 26 and the watch: the guest's sync on its root shell, then QEMU quits
+     * (vresearch has no power key; the PC launcher does the same). The quick-boot state stays, marked stale: never loaded by itself (that would put
      * the disk back to that close), so the next start boots from the disk as iOS left it; it is offered as a
      * way back (goBack) until the next quick save replaces it. Not on the UI thread.
      */
@@ -1876,7 +1876,32 @@ final class Guest {
             logDiskStats(c, q);
             long t0 = System.currentTimeMillis();
             boolean clean = false;
-            if (q != null && q.call("{\"execute\":\"system_powerdown\"}", 10000) != null) {
+            String synced = null;
+            if (forOs != IOS16) {
+                // vresearch has no power key: system_powerdown reaches nothing there (no powerdown notifier in
+                // hw/arm/vresearch.c), and the guest has no launchctl/reboot/halt for its own shutdown. So, as the PC
+                // launcher does (Qmp.SerialSync): the guest's sync on its root shell, then QEMU stops and quits (its
+                // own caches flushed). Open apps close without their own save, as a pulled battery would.
+                try (GuestConsole con = new GuestConsole(consoleSocket(c))) {
+                    String r = con.run("sync", 45_000, 45_000);
+                    synced = r == null ? "no answer from the guest's shell in 45 s" : null;
+                }
+                long syncMs = System.currentTimeMillis() - t0;
+                if (q != null) {
+                    q.call("{\"execute\":\"stop\"}", 10000);
+                    q.call("{\"execute\":\"quit\"}", 10000);
+                }
+                for (int i = 0; i < 300 && Render.alive(p); i++) {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+                clean = !Render.alive(p);
+                AppLog.note(c, "turn off: " + (synced == null ? "guest synced in " + syncMs + " ms" : synced)
+                        + (clean ? ", QEMU quit" : ", QEMU did not quit"));
+            } else if (q != null && q.call("{\"execute\":\"system_powerdown\"}", 10000) != null) {
                 for (int i = 0; i < 600 && Render.alive(p); i++) {
                     try {
                         Thread.sleep(100);
@@ -1888,12 +1913,12 @@ final class Guest {
             }
             if (clean) {
                 forget();
-                setDirty(c, forOs, false);
+                setDirty(c, forOs, synced != null);     // without the guest's sync the next start checks the disk
             } else {
                 stopAndWait();
             }
             long ms = System.currentTimeMillis() - t0;
-            return (clean ? "turned off in " + ms + " ms" : "iOS did not turn off in 60 s; QEMU stopped after " + ms + " ms")
+            return (clean ? "turned off in " + ms + " ms" : "iOS did not turn off; QEMU stopped after " + ms + " ms")
                     + "; the quick save stays as a way back";
         } finally {
             saving.set(false);
