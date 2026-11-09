@@ -1117,6 +1117,7 @@ final class PhoneSetup26 {
             AppLog.note(c, "setup26: migrators: " + (info == null ? "(no answer)" : info.trim()));
             long t1 = System.currentTimeMillis();
             long lastDiag = -1;
+            boolean diagOff = false;
             String plist = "/var/mobile/Library/Preferences/com.apple.migration.plist";
             while (true) {
                 if (cancelled.getAsBoolean()) {
@@ -1127,17 +1128,22 @@ final class PhoneSetup26 {
                 p.step("ios26:wallpaper", 15 + (int) Math.min(70, min * 70 / 60),
                         "DataMigration is setting iOS up (" + min + " min; on a PC about 50). The phone may get warm.");
                 String o = con.run("cat " + plist, 90_000, 60_000);
-                if (o != null && o.contains("LastSystemVersion")) {
+                // (or in an answer that came after run() had sent the command again with a new tag)
+                if (o != null && o.contains("LastSystemVersion") || con.seen("LastSystemVersion")) {
                     break;
                 }
-                if (min / 5 != lastDiag) {
+                if (min / 5 != lastDiag && !diagOff) {
                     // which migrator plugin is slow (datamigrator writes a stacks report per hang; 2026-11-09 the
                     // phone panicked on a SpringBoard.migrator hang that the PC only reports), and what crashes
                     lastDiag = min / 5;
+                    // the newest report only, and only its first 3 KB (the reason is there): reading every report
+                    // line by line in bash took longer than the 5 min between these and queued the plist checks
+                    // behind it, so a DataMigration that had finished went unnoticed (2026-11-09)
                     String d = con.run("cd /private/var/mobile/Library/Logs/CrashReporter && ls | cut -d- -f1 | sort | uniq -c"
-                            + " | sort -rn | head -8 | tr '\\n' ';'; for s in stacks+com.apple.datamigrator*; do [ -f \"$s\" ] || continue;"
-                            + " while IFS= read -r l; do case \"$l\" in *Plugin:*|*\\\"reason\\\"*) echo \" ${s:30:17}: ${l:0:260}\"; break;; esac;"
-                            + " done < \"$s\"; done", 60_000, 60_000);
+                            + " | sort -rn | head -8 | tr '\n' ';'; s=$(ls -t stacks+com.apple.datamigrator* 2> /dev/null | head -1);"
+                            + " [ -n \"$s\" ] && head -c 3000 \"$s\" | tr ',' '\n' | while IFS= read -r l; do case \"$l\" in"
+                            + " *Plugin:*|*\\\"reason\\\"*) echo \" ${l:0:260}\"; break;; esac; done", 60_000, 60_000);
+                    diagOff = d == null;        // a busy guest: no more of these in this boot
                     AppLog.note(c, "setup26: DataMigration " + min + " min, thermal " + thermal(c) + ", crash reports: "
                             + (d == null ? "(no answer)" : d.trim()));
                 }

@@ -121,6 +121,13 @@ final class GuestConsole implements AutoCloseable {
         return null;
     }
 
+    /** True when the console has shown @word and no command's answer has taken it out of the buffer since. */
+    boolean seen(String word) {
+        synchronized (buf) {
+            return buf.indexOf(word) >= 0;
+        }
+    }
+
     /** True when @cmd printed a line that is exactly @word (the command line's own echo has the word too). */
     boolean says(String cmd, String word, long waitMs) {
         String o = run(cmd, waitMs, 30_000);
