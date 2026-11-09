@@ -22,6 +22,11 @@ import java.util.function.BooleanSupplier;
  * iOS's own root shell may not touch the file (EPERM), so the helper VM does: before a disk's first start at
  * 2x with this build it looks at the cache (setup/phone/gestalt.py) and moves one made for another screen
  * aside; iOS writes a new one at that boot. Once per disk: a mark in the "guest" preferences.
+ *
+ * The same run puts the folder of iOS's Auto-Lock setting right (setup/phone/autolock.py): an earlier setup
+ * made it as root, iOS could not write its effective settings there, kept its own one minute instead of the
+ * setup's Never, and went to its Always On Display by itself, where the app cannot follow it (2026-11-10).
+ * That counts only for a start that boots (a loaded save brings the disk back as it was): lockFixed.
  */
 final class Screen26 {
     private Screen26() {}
@@ -41,7 +46,25 @@ final class Screen26 {
 
     /** The disk went back to a save (its cache with it), or is gone: looked at again before its next boot. */
     static void forget(Context c, String disk) {
-        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().remove(key(disk)).commit();
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().remove(key(disk)).remove(lockKey(disk)).commit();
+    }
+
+    private static String lockKey(String disk) {
+        return "autolock-folder-" + disk;
+    }
+
+    /** When @disk booted with its Auto-Lock folder put right (ms since 1970); 0: not yet. */
+    static long lockFixed(Context c, String disk) {
+        return c.getSharedPreferences("guest", Context.MODE_PRIVATE).getLong(lockKey(disk), 0);
+    }
+
+    static void markLock(Context c, String disk) {
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().putLong(lockKey(disk), System.currentTimeMillis()).commit();
+    }
+
+    /** A save from before that boot was loaded: the disk is as it was then, the folder with it. */
+    static void forgetLock(Context c, String disk) {
+        c.getSharedPreferences("guest", Context.MODE_PRIVATE).edit().remove(lockKey(disk)).commit();
     }
 
     private static String asset(Context c, String name) throws IOException {
@@ -75,6 +98,7 @@ final class Screen26 {
                         .replace("{HEIGHT}", String.valueOf(height)));
         files.put("scripts/root26-do.sh", asset(c, "setup/scripts/ios26/root26-do.sh"));
         files.put("phone/gestalt.py", asset(c, "setup/phone/gestalt.py"));
+        files.put("phone/autolock.py", asset(c, "setup/phone/autolock.py"));
         File inTar = new File(jd, "in.tar"), outRaw = new File(jd, "out.raw");
         TarIo.write(inTar, files);
         try (RandomAccessFile r = new RandomAccessFile(outRaw, "rw")) {
@@ -84,7 +108,7 @@ final class Screen26 {
         disks.add(new Helper.Disk("in", inTar, "raw", true));
         disks.add(new Helper.Disk("out", outRaw, "raw", false));
         disks.add(new Helper.Disk("d0", userDisk, "qcow2", false, true));
-        String[] said = {null};
+        String[] said = {null, null};
         Helper.Listener l = new Helper.Listener() {
             @Override
             public void progress(int pct, String text) {
@@ -94,6 +118,8 @@ final class Screen26 {
             public void line(String text) {
                 if (text.startsWith("gestalt ")) {
                     said[0] = text.substring(8).trim();
+                } else if (text.startsWith("autolock ")) {
+                    said[1] = text.substring(9).trim();
                 }
             }
         };
@@ -106,19 +132,19 @@ final class Screen26 {
             r = Helper.run(c, "run", disks, cpus, jd, l, () -> false, true);
             if (r.rc != 0 && r.nat) {
                 AppLog.note(c, "screen26: the helper VM failed natively (" + r.last + "); again under TCG");
-                said[0] = null;
+                said[0] = said[1] = null;
                 r = Helper.run(c, "run", disks, cpus, jd, l, () -> false, false);
             }
         } finally {
             Helper.hold = hold;
         }
-        if (r.rc != 0 || said[0] == null) {
-            throw new IOException("iOS 26's disk could not be set up for this screen: the helper VM "
-                    + (r.rc != 0 ? "failed (" + r.last + ")" : "said nothing about the cache") + "; its log is in "
-                    + new File(jd, "serial.txt"));
+        if (r.rc != 0 || said[0] == null || said[1] == null) {
+            throw new IOException("iOS 26's disk could not be checked before its start: the helper VM "
+                    + (r.rc != 0 ? "failed (" + r.last + ")" : "said nothing about " + (said[0] == null ? "the cache" : "the Auto-Lock folder"))
+                    + "; its log is in " + new File(jd, "serial.txt"));
         }
         AppLog.note(c, "screen26: " + userDisk.getName() + " for " + width + "x" + height + ": MobileGestalt cache "
-                + said[0] + ", " + r.seconds + " s" + (r.nat ? " (native)" : " (TCG)"));
+                + said[0] + ", Auto-Lock folder " + said[1] + ", " + r.seconds + " s" + (r.nat ? " (native)" : " (TCG)"));
         Installer.deleteTree(jd);
         return said[0].startsWith("moved");
     }

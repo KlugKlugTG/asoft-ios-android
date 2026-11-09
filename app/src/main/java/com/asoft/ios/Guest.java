@@ -628,20 +628,25 @@ final class Guest {
      * screen is moved aside there; the quick saves then hold iOS as it ran with it, and loading one would bring
      * the cache back with the rest of the disk, so they go and iOS boots. A 3x disk has the installed disk's own
      * screen (the setup and a PC boot iOS at 3x only). Returns the state to load, or null for a boot.
+     *
+     * The same helper VM run puts the Auto-Lock folder right (Screen26.lockFixed), which holds only for a start
+     * that boots: so a disk not yet booted with it goes through the run before its next boot, at either scale.
      */
     private static String fitScreen26(Context c, String loadTag) throws IOException {
         boolean twoX = scale26(c) == 2;
         int w = twoX ? FB26_W * 2 / 3 : FB26_W, h = twoX ? FB26_H * 2 / 3 : FB26_H;
         String disk = diskName(c, IOS26);
-        if (Screen26.fits(c, disk, w)) {
-            return loadTag;
-        }
-        if (!twoX) {
+        boolean screenDue = twoX && !Screen26.fits(c, disk, w);
+        if (!twoX && !Screen26.fits(c, disk, w)) {
             Screen26.mark(c, disk, w);
+        }
+        boolean lockDue = Screen26.lockFixed(c, disk) == 0;
+        if (!screenDue && !(lockDue && willBoot(c, loadTag))) {
             return loadTag;
         }
         String before = state;
-        preparing = "Setting iOS 26 up for the 2x screen (once, about half a minute)…";
+        preparing = screenDue ? "Setting iOS 26 up for the 2x screen (once, about half a minute)\u2026"
+                : "Checking iOS 26's settings before this boot (once, about half a minute)\u2026";
         state = "preparing";
         try {
             if (Screen26.fit(c, userDisk(c, IOS26), w, h)) {
@@ -651,11 +656,36 @@ final class Guest {
                 loadTag = null;
             }
             Screen26.mark(c, disk, w);
+            if (willBoot(c, loadTag)) {
+                Screen26.markLock(c, disk);     // this boot has the folder; a loaded save would not
+            }
         } finally {
             state = before;
             preparing = null;
         }
         return loadTag;
+    }
+
+    /**
+     * A start of iOS 26 asked to load @loadTag will boot instead: none asked for, no such save, or the quick save
+     * is only a way back (after a Turn off, or made with other hardware than the settings: dropStaleQuick,
+     * quickWithOtherHardware decide the same in start26).
+     */
+    private static boolean willBoot(Context c, String loadTag) {
+        if (loadTag == null) {
+            return true;
+        }
+        List<Snap> saves = snapshots(c, IOS26);
+        if (isQuick(loadTag)) {
+            Snap q = newestQuick(saves);
+            return q == null || quickStale(c, IOS26) || otherHardware(c, IOS26, q.tag);
+        }
+        for (Snap s : saves) {
+            if (s.tag.equals(loadTag)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** One saved state (qcow2 internal snapshot) in the user disk. */
@@ -1447,8 +1477,9 @@ final class Guest {
      */
     static String prepare(Context c, String loadTag) throws IOException {
         synchronized (PREPARING) {
-            if (setupBoot != null || running() || selected(c) != IOS26 || scale26(c) != 2
-                    || Screen26.fits(c, diskName(c, IOS26), FB26_W * 2 / 3) || missing26(c) != null) {
+            if (setupBoot != null || running() || selected(c) != IOS26 || missing26(c) != null
+                    || (scale26(c) != 2 || Screen26.fits(c, diskName(c, IOS26), FB26_W * 2 / 3))
+                    && Screen26.lockFixed(c, diskName(c, IOS26)) != 0) {
                 return loadTag;
             }
             ensureUserDisk(c, dir26(c));
@@ -1738,6 +1769,10 @@ final class Guest {
             // a save the user named takes the disk back to its day, MobileGestalt cache and all: maybe one made
             // before the cache was looked at, so it is looked at again before the next boot (fitScreen26)
             Screen26.forget(c, diskName(c, IOS26));
+        } else if (resumed && !watch && sb == null
+                && savedLedsFile(c, loadTag).lastModified() < Screen26.lockFixed(c, diskName(c, IOS26))) {
+            // a quick save from before the boot that had the Auto-Lock folder put right (a way back): the same
+            Screen26.forgetLock(c, diskName(c, IOS26));
         }
         AppLog.keepRunLogs(c);
         AppLog.note(c, "start " + osName(os) + " from " + g + ": wanted " + (loadTag == null ? "a boot" : loadTag) + ", saves ["

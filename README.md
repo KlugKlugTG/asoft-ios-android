@@ -56,7 +56,8 @@ Vulkan (reims-vgpu, metal2vulkan) on Mesa's Turnip driver for Adreno. Snapdragon
 only so far. Home screen, apps, touch, keyboard, Liquid Glass; quick boot and saves as for iOS 16, and
 an automatic save before Android could run out of memory. It is slow for about 15 minutes after a
 boot. Set up installs it from Apple (below). The screen is 2x by default (faster); 3x (sharp) is under More. On a disk set up with Always On Display, the side button takes iOS to it
-and a touch there wakes it.
+and a touch there wakes it; iOS's own Auto-Lock is set to Never there, because the app cannot
+see iOS go to its Always On Display by itself.
 
 ### watchOS (preview)
 
