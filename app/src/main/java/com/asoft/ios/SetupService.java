@@ -210,7 +210,9 @@ public class SetupService extends Service {
     /** Still downloading: nothing after the download needs the network. */
     private boolean downloadLeft() {
         if ("a26".equals(state.target)) {
-            return state.step.isEmpty() || state.step.endsWith(":fetch");
+            // from the markers: at a resume the step is still empty, and a run past its downloads waited for a
+            // network it did not need (2026-11-09: the iOS 26 wallpaper boot sat 30 min on "No internet connection")
+            return PhoneSetup26.downloadLeft(this);
         }
         return !PhoneSetup.done(this, "ipsw") && !PhoneSetup.done(this, "disk");
     }

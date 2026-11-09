@@ -162,6 +162,16 @@ final class PhoneSetup26 {
         return 0;
     }
 
+    /** A fetch step of this run is not done yet (the only steps that need the network). */
+    static boolean downloadLeft(Context c) {
+        for (String g : groups(c)) {
+            if (!done(c, g, "fetch")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The groups a run makes, in order: the shared part first, then what was asked for. */
     static List<String> groups(Context c) {
         List<String> g = new ArrayList<>();
