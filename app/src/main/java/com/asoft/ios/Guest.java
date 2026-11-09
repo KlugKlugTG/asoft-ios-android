@@ -785,11 +785,13 @@ final class Guest {
             AppLog.note(c, String.format(java.util.Locale.ROOT, "quick save over %s: %.1f GB free, two saves need %.1f GB",
                     old.tag, free / 1e9, room / 1e9));
         }
-        String s = q.hmp("savevm " + target, 600000);
-        if (s == null || !s.replace(" ", "").equals("{\"return\":\"\"}")) {
-            return "savevm " + target + ": " + s;
+        synchronized (KBD) {        // the save and its note of the machine it was made in: no unplug in between
+            String s = q.hmp("savevm " + target, 600000);
+            if (s == null || !s.replace(" ", "").equals("{\"return\":\"\"}")) {
+                return "savevm " + target + ": " + s;
+            }
+            keepLeds(c, target);
         }
-        keepLeds(c, target);
         for (Snap o : now) {
             if (!o.tag.equals(target)) {
                 String d = q.hmp("delvm " + o.tag, 60000);
@@ -797,6 +799,7 @@ final class Guest {
                 savedCpusFile(c, o.tag).delete();
                 savedClockFile(c, o.tag).delete();
                 savedRamFile(c, o.tag).delete();
+                savedNoKbdFile(c, o.tag).delete();
                 if (d == null || !d.replace(" ", "").equals("{\"return\":\"\"}")) {
                     AppLog.note(c, "the older quick save " + o.tag + " stays until the next start: delvm " + d);
                 }
@@ -829,6 +832,7 @@ final class Guest {
         savedCpusFile(c, tag).delete();
         savedClockFile(c, tag).delete();
         savedRamFile(c, tag).delete();
+        savedNoKbdFile(c, tag).delete();
         Qmp q = qmp;
         if (running() && q != null) {
             String r = q.hmp("delvm " + tag, 60000);
@@ -1080,7 +1084,8 @@ final class Guest {
         userDisk(c, forOs).delete();
         String prefix = diskName(c, forOs) + ".";
         File[] f = c.getFilesDir().listFiles((d, n) -> n.startsWith(prefix)
-                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock") || n.endsWith(".ram")));
+                && (n.endsWith(".leds") || n.endsWith(".cpus") || n.endsWith(".clock") || n.endsWith(".ram")
+                || n.endsWith(".nokbd")));
         if (f != null) {
             for (File x : f) {
                 x.delete();
@@ -1109,6 +1114,17 @@ final class Guest {
             // the display then reads on after a load
         }
         keepCpus(c, tag);
+        File noKbd = savedNoKbdFile(c, tag);
+        if (kbd26 || !ios26Running()) {
+            noKbd.delete();
+        } else {
+            try {
+                noKbd.createNewFile();
+            } catch (IOException e) {
+                // read as a save with the keyboard: its load would fail, and the start falls back to a boot
+                AppLog.note(c, "cannot note that " + tag + " has no USB keyboard: " + e.getMessage());
+            }
+        }
         if (ios26Running()) {       // iOS 26 and the watch run on the host counter (the watch on its 19.2 MHz tree)
             try (PrintWriter w = new PrintWriter(new FileWriter(savedClockFile(c, tag)))) {
                 w.println(runningOs == WATCH ? WatchProfile.CLOCK : CLOCK_V1);
@@ -1161,6 +1177,55 @@ final class Guest {
                     .format(new java.util.Date(saved)) + "), and it is older than the clock fix";
         }
         return null;
+    }
+
+    /**
+     * iOS 26's QEMU has its USB keyboard (usb-kbd, "ukbd"). iOS shows its own keyboard only while no hardware
+     * keyboard is attached (2026-11-10: with one, a text field came up with no keys under it), and the phone has
+     * none to pass on: iOS 26 boots without the device. A save loads only into the machine it was made in, so
+     * one made with the keyboard (every save before this) loads with it and the keyboard is unplugged once it
+     * runs (unplugKeyboard); a save made without it has a ".nokbd" file beside it. The watch and the setup's
+     * boots keep the keyboard, as they were.
+     */
+    private static volatile boolean kbd26;
+    /** This QEMU loaded a save made with the keyboard: unplugged once QMP is up. */
+    private static volatile boolean unplug26;
+    /** A save and its ".nokbd" note are one step, and so is the unplug: neither in the middle of the other. */
+    private static final Object KBD = new Object();
+
+    private static File savedNoKbdFile(Context c, String tag) {
+        return new File(c.getFilesDir(), userPrefix(c) + tag + ".nokbd");
+    }
+
+    /**
+     * Unplugs iOS 26's USB keyboard from the running QEMU (device_del: iOS sees a keyboard pulled out, and its
+     * own comes up at the next text field). The answer comes before the device is gone, so QEMU's list of
+     * devices is asked until it is.
+     */
+    private static void unplugKeyboard(Context c, Qmp q) {
+        synchronized (KBD) {
+            if (!kbd26 || qmp != q) {
+                return;
+            }
+            String r = q.call("{\"execute\":\"device_del\",\"arguments\":{\"id\":\"ukbd\"}}", 10_000);
+            for (int i = 0; i < 50 && r != null; i++) {
+                String l = q.call("{\"execute\":\"qom-list\",\"arguments\":{\"path\":\"/machine/peripheral\"}}", 5_000);
+                if (l == null) {
+                    return;         // QEMU went away
+                }
+                if (!l.contains("\"ukbd\"")) {
+                    kbd26 = false;
+                    AppLog.note(c, "keyboard: the save's USB keyboard is unplugged, iOS uses its own");
+                    return;
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            AppLog.note(c, "keyboard: the USB keyboard did not unplug (device_del: " + r + "); iOS shows no keyboard of its own");
+        }
     }
 
     /** The vCPU count of the running iOS: a save loads only into a QEMU with the same -smp. */
@@ -1237,6 +1302,9 @@ final class Guest {
                     try {
                         q.connect(sock.getPath(), 5000);
                         qmp = q;
+                        if (unplug26 && runningOs == IOS26 && pid == forPid) {
+                            unplugKeyboard(c, q);
+                        }
                         return;
                     } catch (IOException e) {
                         q.close();
@@ -1757,9 +1825,19 @@ final class Guest {
                 // main loop and the BQL; it moved them (bqlprof) but sped nothing up measurably (2026-11-05)
                 "-device", "virtio-blk-pci,drive=root" + ("on".equals(ov.get("disk-iothread")) ? ",iothread=disk" : ""),
                 "-qmp", "unix:" + qmpPath(c) + ",server,nowait",
-                "-device", "qemu-xhci,id=xhci,conditional-intr-mapping=on,nonremovable=2",
-                "-device", "usb-kbd,bus=xhci.0,port=1,id=ukbd,idle-reports=off",
-                "-device", "usb-touchscreen,bus=xhci.0,port=2,id=utouch"));
+                "-device", "qemu-xhci,id=xhci,conditional-intr-mapping=on,nonremovable=2"));
+        // iOS 26 without a USB keyboard, so that iOS shows its own (kbd26); a save made with one loads with it
+        boolean kbd = watch || sb != null || resumed && !savedNoKbdFile(c, loadTag).isFile();
+        kbd26 = kbd;
+        unplug26 = kbd && !watch && sb == null;
+        if (kbd) {
+            cmd.add("-device");
+            cmd.add("usb-kbd,bus=xhci.0,port=1,id=ukbd,idle-reports=off");
+        }
+        cmd.add("-device");
+        cmd.add("usb-touchscreen,bus=xhci.0,port=2,id=utouch");
+        AppLog.note(c, "keyboard: " + (!kbd ? "iOS's own (no USB keyboard)" : unplug26 ? "the save has a USB keyboard: unplugged once it runs"
+                : "a USB keyboard"));
         if (watch) {
             WatchProfile.addButtons(cmd);
             WatchProfile.addNetwork(cmd);
@@ -1913,11 +1991,13 @@ final class Guest {
                 }
                 return why;
             }
-            String r = q.hmp("savevm " + tag, 600000);
-            if (r == null || !r.replace(" ", "").equals("{\"return\":\"\"}")) {
-                return "savevm: " + r;
+            synchronized (KBD) {
+                String r = q.hmp("savevm " + tag, 600000);
+                if (r == null || !r.replace(" ", "").equals("{\"return\":\"\"}")) {
+                    return "savevm: " + r;
+                }
+                keepLeds(c, tag);
             }
-            keepLeds(c, tag);
             return null;
         } finally {
             saving.set(false);
