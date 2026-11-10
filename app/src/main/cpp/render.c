@@ -133,11 +133,14 @@ Java_com_asoft_ios_Render_readFrame(JNIEnv *env, jclass cls, jlong off, jbyteArr
 }
 
 /*
- * fork + exec of QEMU with @argv and @envp, stdout and stderr to @log, keeping ram_fd.
- * Java's ProcessBuilder closes every descriptor but 0-2 in the child, hence this.
+ * fork + exec of QEMU with @argv and @envp in the directory @cwd, stdout and stderr to @log, keeping
+ * ram_fd. Java's ProcessBuilder closes every descriptor but 0-2 in the child, hence this. @cwd is the
+ * app's files dir: the app's libslirp reads its DNS servers from a relative resolv.conf there
+ * (patch-slirp.py, Guest.writeResolvConf), under either package name.
  */
 JNIEXPORT jint JNICALL
-Java_com_asoft_ios_Render_spawn(JNIEnv *env, jclass cls, jobjectArray jargv, jobjectArray jenvp, jstring jlog)
+Java_com_asoft_ios_Render_spawn(JNIEnv *env, jclass cls, jobjectArray jargv, jobjectArray jenvp, jstring jlog,
+                                jstring jcwd)
 {
     int na = (*env)->GetArrayLength(env, jargv), ne = (*env)->GetArrayLength(env, jenvp);
     char **argv = calloc(na + 1, sizeof(char *)), **envp = calloc(ne + 1, sizeof(char *));
@@ -157,6 +160,9 @@ Java_com_asoft_ios_Render_spawn(JNIEnv *env, jclass cls, jobjectArray jargv, job
     int log = open(lc, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     (*env)->ReleaseStringUTFChars(env, jlog, lc);
     int null = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    const char *cc = (*env)->GetStringUTFChars(env, jcwd, NULL);
+    char *cwd = strdup(cc);
+    (*env)->ReleaseStringUTFChars(env, jcwd, cc);
     pid_t pid = fork();
     if (pid == 0) {
         /* async-signal-safe calls only until exec: the JVM had threads */
@@ -164,9 +170,13 @@ Java_com_asoft_ios_Render_spawn(JNIEnv *env, jclass cls, jobjectArray jargv, job
         dup2(log, 1);
         dup2(log, 2);
         setsid();
+        if (chdir(cwd) != 0) {
+            /* QEMU still runs; its guest then resolves no names */
+        }
         execve(argv[0], argv, envp);
         _exit(127);
     }
+    free(cwd);
     close(log);
     close(null);
     for (int i = 0; i < na; i++) {

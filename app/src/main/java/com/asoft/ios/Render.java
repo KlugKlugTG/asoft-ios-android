@@ -25,8 +25,11 @@ final class Render {
     /** @len bytes of iOS 26's frame memory from @off into @out; bytes read, -1 before a start. */
     static native int readFrame(long off, byte[] out, int len);
 
-    /** Starts @argv with @envp (K=V), output to @log, keeping the guest RAM fd; the pid, or -1. */
-    static native int spawn(String[] argv, String[] envp, String log);
+    /**
+     * Starts @argv with @envp (K=V) in the directory @cwd (the app's files dir, where libslirp reads
+     * resolv.conf: patch-slirp.py), output to @log, keeping the guest RAM fd; the pid, or -1.
+     */
+    static native int spawn(String[] argv, String[] envp, String log, String cwd);
 
     static native boolean alive(int pid);
 

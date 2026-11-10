@@ -38,7 +38,8 @@ echo "$LIST" | tr -d '\r' | while read -r soname path; do
     pull "$path" "$OUT/lib_$soname.so"
 done
 # Termux's libslirp reads the DNS server from Termux's prefix, closed to other apps: point it at
-# the file Guest.writeResolvConf() keeps (no longer than the old path, NUL padded)
+# the file Guest.writeResolvConf() keeps, a relative resolv.conf in QEMU's working directory (the
+# app's files dir, Render.spawn), under either package (NUL padded)
 python "$(cygpath -w "$HERE/patch-slirp.py")" "$(cygpath -w "$OUT/lib_libslirp.so.so")"
 adb exec-out run-as com.termux cat /data/data/com.termux/files/home/el0bench/el0bench.elf > "$ASSETS/el0bench.elf"
 ls "$OUT" | wc -l

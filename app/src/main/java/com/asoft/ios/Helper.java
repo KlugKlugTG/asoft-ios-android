@@ -213,7 +213,8 @@ final class Helper {
         File pidFile = new File(dir, "pid");
         killLeftover(c, pidFile);
         long t0 = System.currentTimeMillis();
-        int pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]), new File(dir, "qemu-stderr.txt").getPath());
+        int pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]), new File(dir, "qemu-stderr.txt").getPath(),
+                c.getFilesDir().getPath());
         if (pid < 0) {
             throw new IOException("cannot start the helper VM");
         }

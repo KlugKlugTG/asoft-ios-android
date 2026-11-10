@@ -1360,7 +1360,10 @@ final class Guest {
         t.start();
     }
 
-    /** The DNS servers of the active network, for slirp (see patch-slirp.py); public ones as a fallback. */
+    /**
+     * The DNS servers of the active network, for slirp, which reads a relative resolv.conf from QEMU's
+     * working directory, the files dir (patch-slirp.py, Render.spawn); public ones as a fallback.
+     */
     private static void writeResolvConf(Context c) throws IOException {
         StringBuilder sb = new StringBuilder();
         android.net.ConnectivityManager cm = c.getSystemService(android.net.ConnectivityManager.class);
@@ -1613,7 +1616,7 @@ final class Guest {
         }
         setDirty(c, IOS16, true);
         pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]),
-                new File(run, "qemu-stderr.txt").getPath());
+                new File(run, "qemu-stderr.txt").getPath(), c.getFilesDir().getPath());
         if (pid < 0) {
             throw new IOException("cannot start QEMU");
         }
@@ -1945,7 +1948,7 @@ final class Guest {
             new File(run, "console.sock").delete();
         }
         pid = Render.spawn(cmd.toArray(new String[0]), envp.toArray(new String[0]),
-                new File(run, "qemu-stderr.txt").getPath());
+                new File(run, "qemu-stderr.txt").getPath(), c.getFilesDir().getPath());
         if (pid < 0) {
             throw new IOException("cannot start QEMU");
         }
