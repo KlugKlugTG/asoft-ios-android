@@ -1973,6 +1973,21 @@ final class Guest {
         }
     }
 
+    /**
+     * Save and close only (never saveNamed or the automatic save, after which iOS goes on): QEMU paused, the
+     * release-ram capability makes the save free each page of iOS's RAM once it is written, so Android's
+     * memory falls during the save instead of every page it had swapped out coming back at once (lmkd ended
+     * the app, and the save, that way). QEMU then refuses to run that machine again; it only quits or loads.
+     * An engine that refuses the capability saves as before, and so does one that accepts it without the
+     * release (iOS 16's libqemu.so, iOS 26 engines from before 2026-11-10).
+     */
+    private static void releaseRamWhileSaving(Context c, Qmp q) {
+        String r = q.call("{\"execute\":\"migrate-set-capabilities\",\"arguments\":{\"capabilities\":"
+                + "[{\"capability\":\"release-ram\",\"state\":true}]}}", 10000);
+        AppLog.note(c, "save and close: release-ram " + (r == null ? "got no answer"
+                : r.contains("\"error\"") ? "refused: " + r : "set"));
+    }
+
     static String saveAndQuit(Context c) {
         waitForSave();
         if (!saving.compareAndSet(false, true)) {
@@ -1992,6 +2007,8 @@ final class Guest {
                 why = "stop: no answer";
             } else {
                 logDiskStats(c, q);
+                releaseRamWhileSaving(c, q);
+                MemoryCleaner.beforeSave(c);
                 why = saveQuick(c, q);
             }
             long saved = System.currentTimeMillis() - t0;

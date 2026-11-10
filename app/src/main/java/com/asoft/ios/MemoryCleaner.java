@@ -63,7 +63,13 @@ final class MemoryCleaner {
                 sleep(200);
             }
             while (Guest.running() && enabled(app)) {
-                round(app);
+                if (busy.compareAndSet(false, true)) {
+                    try {
+                        round(app, "free memory", 30_000);
+                    } finally {
+                        busy.set(false);
+                    }
+                }
                 sleep(PERIOD_MS);
             }
         }, "free-memory");
@@ -114,22 +120,46 @@ final class MemoryCleaner {
     /** The last round's failure through adb, said once in the log until it changes. */
     private static String adbSaid;
 
-    private static void round(Context c) {
+    /** A round is running (the timer's or beforeSave's): the other one skips. */
+    private static final java.util.concurrent.atomic.AtomicBoolean busy =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * One round now, when the user has this on: Save and close calls it with iOS paused, right before the
+     * save writes its state, so what the other apps hold in the background goes first. Skipped while the
+     * timer's round runs (that one frees the same).
+     */
+    static void beforeSave(Context c) {
+        if (!enabled(c)) {
+            return;
+        }
+        if (!busy.compareAndSet(false, true)) {
+            AppLog.note(c, "free memory before the save: the timer's round is running");
+            return;
+        }
+        try {
+            round(c, "free memory before the save", 10_000);
+        } finally {
+            busy.set(false);
+        }
+    }
+
+    private static void round(Context c, String what, int adbTimeoutMs) {
         ActivityManager am = c.getSystemService(ActivityManager.class);
         long before = availableMb(am);
         if (WirelessAdb.paired(c)) {
             try {
-                WirelessAdb.shell(c, "am kill-all", 30_000);
+                WirelessAdb.shell(c, "am kill-all", adbTimeoutMs);
                 sleep(1500);
                 adbSaid = null;
-                AppLog.note(c, "free memory: am kill-all through wireless adb, available " + before + " -> "
+                AppLog.note(c, what + ": am kill-all through wireless adb, available " + before + " -> "
                         + availableMb(am) + " MB");
                 return;
             } catch (java.io.IOException e) {
                 String why = String.valueOf(e.getMessage());
                 if (!why.equals(adbSaid)) {
                     adbSaid = why;
-                    AppLog.note(c, "free memory: wireless adb: " + why);
+                    AppLog.note(c, what + ": wireless adb: " + why);
                 }
                 if (Build.VERSION.SDK_INT >= 34) {
                     return;     // nothing else an app may do here
@@ -141,12 +171,12 @@ final class MemoryCleaner {
             try {
                 am.killBackgroundProcesses(p);
             } catch (SecurityException e) {
-                AppLog.note(c, "free memory: refused (" + e.getMessage() + ")");
+                AppLog.note(c, what + ": refused (" + e.getMessage() + ")");
                 return;
             }
         }
         sleep(1500);
-        AppLog.note(c, "free memory: " + apps.size() + " apps' background processes ended, available "
+        AppLog.note(c, what + ": " + apps.size() + " apps' background processes ended, available "
                 + before + " -> " + availableMb(am) + " MB");
     }
 }
