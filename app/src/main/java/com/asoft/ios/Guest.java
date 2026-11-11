@@ -1890,7 +1890,12 @@ final class Guest {
                 // Before QEMU's alignment fix (block/file-posix.c, 2026-11-05) a third of iOS 26's writes
                 // failed this way: this phone's f2fs with inline encryption fails a buffer that is not
                 // 4 KiB-aligned with EIO, which QEMU's probe took for "aligned"; since then 0 of 2,833
-                "-drive", "file=" + (sb != null ? sb.disk : userDisk(c, os)).getPath() + ",if=none,id=root,cache=" + ov.getOrDefault("cache", "none")
+                "-drive", "file=" + (sb != null ? sb.disk : userDisk(c, os)).getPath() + ",if=none,id=root,cache="
+                        // a setup boot's disk is a build disk (first boot, DataMigration): its writes would go
+                        // through O_DIRECT (cache=none) one guest flush at a time; writeback keeps them in the
+                        // host page cache, as the helper's own build disks are (cache=unsafe). The boot ends
+                        // with a shell sync and a QMP quit, so the disk is whole unless the phone itself dies.
+                        + (sb != null ? "writeback" : ov.getOrDefault("cache", "none"))
                         + ",discard=unmap,format=qcow2",
                 "-object", "iothread,id=disk",
                 // ios26.txt disk-iothread=on: the disk's requests and completions on their own thread, off the

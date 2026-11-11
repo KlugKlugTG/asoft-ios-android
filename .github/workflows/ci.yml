@@ -1,0 +1,54 @@
+name: build-and-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell-check:
+    name: Setup scripts parse (bash -n)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every .sh file passes bash -n
+        run: |
+          set -e
+          scripts=$(git ls-files '*.sh' | sort)
+          test -n "$scripts"
+          n=0
+          for f in $scripts; do
+            bash -n "$f"
+            n=$((n + 1))
+          done
+          echo "bash -n OK on $n scripts"
+
+  build-apk:
+    # Builds the debug APK (the app's own code, the NDK parts: unpack.c + lzfse). The big native
+    # pieces (libqemu.so, Turnip, ...) are not in the repository: pull-libs*.sh fetches them, so
+    # this APK is a build sanity check, not a runnable install.
+    name: Build the debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the Android SDK pieces the build needs
+        run: |
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -sSfL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13846066" "cmake;3.22.1"
+      - name: The repo's gradle.properties names the author's Windows JDK; drop it for the runner
+        run: sed -i '/^org.gradle.java.home=/d' gradle.properties
+      - name: Build
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v5
+        with:
+          name: asoft-ios-debug-apk
+          path: app/build/outputs/apk/debug/*.apk

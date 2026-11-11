@@ -187,3 +187,32 @@ The app's code: MIT (LICENSE). The APK also carries:
   AOSP's adb (Apache 2.0); SPAKE2's two points are BoringSSL's.
 
 Not affiliated with Apple. iOS is Apple's.
+
+## Making the install faster (this fork)
+
+Where a phone install's hours go (measured on an S25 Ultra, 2026-11-08/09): iOS 16 about
+75 minutes (download ~26, the disk ~21, first start ~23-40); iOS 26 about 2.5 hours
+(download ~32, the root file system ~32, DataMigration ~60). This fork changes:
+
+- **8 vCPUs by default** on any phone with 8 or more CPU threads (XNU runs under TCG, where
+  vCPUs in parallel count for more than fast cores). This speeds iOS 16's first start and both
+  of iOS 26's setup boots (persona, DataMigration) and the normal runs. `cpu.txt` in the app's
+  external files dir (`/Android/data/com.asoft.ios/files/cpu.txt`) still overrides: `smp=4`
+  restores 4 vCPUs, `pin=6,7` pins.
+- iOS 26's setup boots write their disk with `cache=writeback` instead of `cache=none`
+  (O_DIRECT): the DataMigration boot's writes stay in the host page cache.
+- The build disks use 1 MiB qcow2 clusters (the many small files of the rootfs copy churn
+  64 KiB clusters' L2 tables).
+- The download opens 16 connections instead of 8 (Apple's CDN throttles per connection).
+- The rootfs build itself is sped up in the companion fork
+  [KlugKlugTG/asoft-ios](https://github.com/KlugKlugTG/asoft-ios): the three image trees are
+  copied in parallel (each is its own apfs-fuse process), the sysroot is signed with
+  `xargs -P` instead of one python per file, and the redundant full-volume `fsck -n`
+  verification passes are dropped. That companion fork's `installer/` and `ios26/` are what
+  `pull-setup.sh` puts into this app's assets, so both forks are needed for the build steps
+  to change.
+- The build steps' scripts run on older app releases as they are: only the app-side changes
+  (vCPUs, cache, clusters, connections) are in the APK.
+
+`ci.yml` (GitHub Actions) builds the debug APK and bash-checks every `*.sh`, so the speedup
+patches are verified on every push.

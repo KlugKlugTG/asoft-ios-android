@@ -9,8 +9,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * How many vCPUs iOS gets and which of the phone's CPUs run them: four, on any core, on every
- * phone. The kernel's ranking of its cores (cpu_capacity, 1024 = the fastest; "fast" = 60% of the
+ * How many vCPUs iOS gets and which of the phone's CPUs run them: eight on a phone with 8 or
+ * more CPU threads (an 8-core flagship), four on smaller ones — any core, nothing pinned.
+ * The kernel's ranking of its cores (cpu_capacity, 1024 = the fastest; "fast" = 60% of the
  * best or more) goes to the app's log only. Measured on the A71 (2026-11-05, power saving on): two
  * Cortex-A76 (1024) and six A55 (492); four vCPUs anywhere reached the lock screen in ~21 min, two
  * vCPUs pinned to the A76 (with the native EL0 stubs) had not left the boot logo after 30 min.
@@ -55,6 +56,11 @@ final class CpuPlan {
     }
 
     private static CpuPlan auto() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        // eight vCPUs on a phone with eight threads or more: XNU runs under TCG, and vCPUs in
+        // parallel count for more than fast cores (the A71 test); a hot phone throttles it back.
+        // cpu.txt overrides ("smp=4" forces the old behaviour).
+        int smp = cores >= 8 ? 8 : 4;
         List<Integer> cap = new ArrayList<>();
         for (int i = 0; i < 64; i++) {
             File d = new File("/sys/devices/system/cpu/cpu" + i);
@@ -68,7 +74,7 @@ final class CpuPlan {
             best = Math.max(best, v);
         }
         if (cap.isEmpty() || best <= 0) {
-            return new CpuPlan(4, "", "no cpu_capacity: 4 vCPUs, any core");
+            return new CpuPlan(smp, "", "no cpu_capacity: " + smp + " vCPUs, any core");
         }
         StringBuilder fast = new StringBuilder();
         int n = 0;
@@ -77,7 +83,7 @@ final class CpuPlan {
                 fast.append(n++ > 0 ? "," : "").append(i);
             }
         }
-        return new CpuPlan(4, "", n + " of " + cap.size() + " cores fast (capacity " + cap + "), fast: " + fast);
+        return new CpuPlan(smp, "", n + " of " + cap.size() + " cores fast (capacity " + cap + "), fast: " + fast);
     }
 
     private static int readInt(File f) {

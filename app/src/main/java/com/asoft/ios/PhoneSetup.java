@@ -418,7 +418,8 @@ final class PhoneSetup {
         root.delete();
         scratch.delete();
         for (String[] a : new String[][] {{root.getPath(), "16G"}, {scratch.getPath(), "10G"}}) {
-            String[] r = Emu.qemuImg(c, "create", "-q", "-f", "qcow2", a[0], a[1]);
+            // 1 MiB clusters: the disk build's many small files churn 64 KiB clusters' L2 tables
+            String[] r = Emu.qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", a[0], a[1]);
             if (!"0".equals(r[0])) {
                 throw new IOException("qemu-img create failed: " + r[1].trim());
             }
@@ -435,7 +436,7 @@ final class PhoneSetup {
                 f.delete();
             }
             for (String[] a : new String[][] {{root.getPath(), "16G"}, {scratch.getPath(), "10G"}}) {
-                String[] q = Emu.qemuImg(c, "create", "-q", "-f", "qcow2", a[0], a[1]);
+                String[] q = Emu.qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", a[0], a[1]);
                 if (!"0".equals(q[0])) {
                     throw new IOException("qemu-img create failed: " + q[1].trim());
                 }

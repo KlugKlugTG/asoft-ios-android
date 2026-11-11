@@ -654,7 +654,7 @@ final class PhoneSetup26 {
         all.add(new Helper.Disk("out", outRaw, "raw", false));
         File scratch = new File(jd, "scratch.qcow2");
         if (!j.scratch.isEmpty()) {
-            qemuImg(c, "create", "-q", "-f", "qcow2", scratch.getPath(), String.valueOf(j.scratchBytes));
+            qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", scratch.getPath(), String.valueOf(j.scratchBytes));
             all.add(new Helper.Disk("scratch", scratch, "qcow2", false));
         }
         all.addAll(disks);
@@ -680,7 +680,7 @@ final class PhoneSetup26 {
             remakeNew(c, j);
             if (!j.scratch.isEmpty()) {
                 scratch.delete();
-                qemuImg(c, "create", "-q", "-f", "qcow2", scratch.getPath(), String.valueOf(j.scratchBytes));
+                qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", scratch.getPath(), String.valueOf(j.scratchBytes));
             }
             r = Helper.run(c, "run", all, cpus, jd, l, cancelled, false);
         }
@@ -715,7 +715,7 @@ final class PhoneSetup26 {
             if ("new".equals(d[1])) {
                 String size = NEW_SIZES.get(d[0]);
                 in(c, d[0]).delete();
-                qemuImg(c, "create", "-q", "-f", "qcow2", in(c, d[0]).getPath(), size);
+                qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", in(c, d[0]).getPath(), size);
             }
         }
     }
@@ -725,7 +725,7 @@ final class PhoneSetup26 {
         f.delete();
         f.getParentFile().mkdirs();
         NEW_SIZES.put(rel, size);
-        qemuImg(c, "create", "-q", "-f", "qcow2", f.getPath(), size);
+        qemuImg(c, "create", "-q", "-f", "qcow2", "-o", "cluster_size=1M", f.getPath(), size);
     }
 
     /** @rel, a new qcow2 overlay on @base (its backing name relative, as the PC launcher's). */

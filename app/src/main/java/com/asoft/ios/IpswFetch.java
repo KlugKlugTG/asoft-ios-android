@@ -46,7 +46,9 @@ import java.util.zip.Inflater;
  */
 final class IpswFetch {
     static final int CHUNK = 32 << 20;
-    static final int CONNECTIONS = 8;
+    // Apple's CDN throttles per connection (on 2026-11-08 the aggregate was ~3.7 MB/s over 8, while
+    // single connections reached 6 MB/s): more connections raise the aggregate until a per-IP cap.
+    static final int CONNECTIONS = 16;
     /**
      * A deflated member up to this size comes whole in one request and is inflated in memory (its bytes and
      * the inflated ones on the heap at once); a bigger one goes in parts and is inflated as a stream. 256 MB
