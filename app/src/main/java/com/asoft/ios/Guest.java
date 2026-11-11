@@ -1847,7 +1847,10 @@ final class Guest {
         // tree over an unpatched libMobileGestalt takes the hardware flipbook, which kills backboardd)
         boolean aod = sb == null && !watch && aodDisk(userDisk(c, IOS26)) && aodFiles(g);
         aodRunning = aod;
-        String tree = aod ? DTREE26_AOD : DTREE26;
+        // cpu.txt "smp=8" (the PC launcher's experimental mode): the setup's 8-vCPU trees, kept
+        // next to the 4-vCPU ones when the install was made with them
+        String tree = !watch && smp >= 8 && new File(g, aod ? "dtree-phone8-aod" : "dtree-phone8").isFile()
+                ? (aod ? "dtree-phone8-aod" : "dtree-phone8") : (aod ? DTREE26_AOD : DTREE26);
         // the RAM: a save's own (it only loads into the size it was made with), else the one chosen on the home screen
         String dtree, tc;
         if (sb != null) {

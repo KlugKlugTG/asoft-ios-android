@@ -774,7 +774,8 @@ final class PhoneSetup26 {
         j.file("downloads/ios_sysroot.tar.gz").file("cloudos/Firmware/" + rd + ".trustcache").file("fw/dtree.orig")
                 .file("cloud/kernelcache.research.vphone600.decompressed").file("tools/qemu-sptm")
                 .file("cloudos/Firmware/" + img + ".aea.trustcache").file("downloads/" + var(m, SHARED, "PLUGIN"));
-        j.out.addAll(List.of("rd-shell.hfs", "cloud/rd.trustcache.im4p", "dtree-smp4", "dtree-phone", "dtree-phone-aod", "fw/bootkc",
+        j.out.addAll(List.of("rd-shell.hfs", "cloud/rd.trustcache.im4p", "dtree-smp4", "dtree-phone", "dtree-phone-aod",
+                "dtree-phone8", "dtree-phone8-aod", "fw/bootkc",
                 "install/work/gpu"));
         Job shared = j;
         // (the shared group's bodies are iOS 26's)
@@ -936,6 +937,16 @@ final class PhoneSetup26 {
         return b;
     }
 
+    /**
+     * The 8-vCPU phone tree (dtree-phone8[-aod]) when cpu.txt asks for 8 vCPUs (the PC launcher's
+     * experimental mode, here for the setup boots: DataMigration is the longest step of a phone install
+     * and is CPU-bound) and the shared build made the trees, else the 4-vCPU ones.
+     */
+    private static String setupTree(Context c, boolean aod) {
+        String want = aod ? "dtree-phone8-aod" : "dtree-phone8";
+        return CpuPlan.forThisPhone(c).smp >= 8 && in(c, want).isFile() ? want : (aod ? "dtree-phone-aod" : "dtree-phone");
+    }
+
     /** Ends a setup boot: the guest's disks synced through its shell, QEMU quit; true when sync answered. */
     private static boolean endBoot(Context c, GuestConsole con) {
         boolean synced = con != null && con.run("sync", 180_000, 60_000) != null;
@@ -1030,7 +1041,7 @@ final class PhoneSetup26 {
     private static void iosFirstBoot(Context c, PhoneSetup.Progress p, BooleanSupplier cancelled) throws IOException {
         // 4.5: usermanagerd writes the persona manifest and the user session (persona.kb, usersession.kb); the
         // disk has no libMobileGestalt patch yet (the apps step's), so the plain tree and kernel, as the PC's -NoAod
-        startCool(c, boot26(c, "root26g.qcow2", "cloud/kernelcache.research.vphone600.decompressed", "dtree-phone", "root26.tc"), p, "ios26:firstboot", cancelled);
+        startCool(c, boot26(c, "root26g.qcow2", "cloud/kernelcache.research.vphone600.decompressed", setupTree(c, false), "root26.tc"), p, "ios26:firstboot", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         try {
@@ -1094,7 +1105,7 @@ final class PhoneSetup26 {
             overlay(c, "root26-gpu.qcow2", "root.qcow2");
         }
         java.nio.file.Files.copy(in(c, "root26-gpu.tc").toPath(), in(c, "root.tc").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        startCool(c, boot26(c, "root.qcow2", "fw/bootkc", "dtree-phone-aod", "root.tc"), p, "ios26:wallpaper", cancelled);
+        startCool(c, boot26(c, "root.qcow2", "fw/bootkc", setupTree(c, true), "root.tc"), p, "ios26:wallpaper", cancelled);
         GuestConsole con = new GuestConsole(Guest.consoleSocket(c));
         long t0 = System.currentTimeMillis();
         try {
@@ -1249,6 +1260,10 @@ final class PhoneSetup26 {
         place(in(c, "rd-shell.hfs"), new File(d, "rd-shell.hfs"));
         place(in(c, "dtree-phone"), new File(d, Guest.DTREE26));
         place(in(c, "dtree-phone-aod"), new File(d, Guest.DTREE26_AOD));
+        if (in(c, "dtree-phone8").isFile()) {   // for normal runs at 8 vCPUs (cpu.txt "smp=8")
+            place(in(c, "dtree-phone8"), new File(d, "dtree-phone8"));
+            place(in(c, "dtree-phone8-aod"), new File(d, "dtree-phone8-aod"));
+        }
         new File(c.getFilesDir(), Guest.DTREE26 + "-2x").delete();       // made again from the new tree
         writeInfo(d, "ios26");
         for (String n : new String[] {"root.qcow2", "root26-gpu.qcow2", "root26-apps.qcow2", "root26-activation.qcow2", "root26g.qcow2",

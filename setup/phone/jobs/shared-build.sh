@@ -8,6 +8,10 @@ export QEMU_SPTM=$A/tools/qemu-sptm
 python3 -I $S/dt-root26smp.py fw/dtree.orig dtree-smp4 --cpus 4
 python3 -I $S/dt-phone.py dtree-smp4 dtree-phone --timebase 19200000
 python3 -I $S/dt-aod.py dtree-phone dtree-phone-aod
+# the 8-vCPU trees too (the PC installer builds these; on the phone cpu.txt "smp=8" boots them)
+python3 -I $S/dt-root26smp.py fw/dtree.orig dtree-smp8 --cpus 8
+python3 -I $S/dt-phone.py dtree-smp8 dtree-phone8 --timebase 19200000
+python3 -I $S/dt-aod.py dtree-phone8 dtree-phone8-aod
 progress 65 "the kernel with OpenGL ES's keys"
 python3 -I $S/kc-gles.py cloud/kernelcache.research.vphone600.decompressed fw/bootkc
 progress 75 "the guest GPU driver"
