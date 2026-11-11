@@ -53,11 +53,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          TAG=v0.1.4        # pinned: this fork's Java is that release's code
           mkdir -p /tmp/official
-          gh release download --repo alpersamur3/asoft-ios-android --pattern '*.apk' --dir /tmp/official --clobber
-          apk=$(ls -S /tmp/official/*.apk | head -1)
+          gh release download "$TAG" --repo alpersamur3/asoft-ios-android \
+            --pattern '*.apk' --pattern 'SHA256SUMS.txt' --dir /tmp/official --clobber
+          cd /tmp/official
+          apk=$(ls -S *.apk | head -1)
           echo "official APK: $apk ($(du -h "$apk" | cut -f1))"
+          want=$(awk -v f="$apk" '$2 == f || $2 == "*" f {print $1}' SHA256SUMS.txt)
+          got=$(sha256sum "$apk" | awk '{print $1}')
+          echo "sha256 $got, the release's $want"
+          test -n "$want" && test "$want" = "$got"
           unzip -q "$apk" 'lib/arm64-v8a/*' 'assets/*' -d /tmp/official-x
+          cd "$GITHUB_WORKSPACE"
           mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets
           cp /tmp/official-x/lib/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/
           cp -r /tmp/official-x/assets/. app/src/main/assets/
