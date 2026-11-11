@@ -68,7 +68,7 @@ final class PhoneSetup {
     /** The bundled list (the PC installers' asoft-setup.json). */
     static JSONObject manifest(Context c) throws IOException {
         try (InputStream in = c.getAssets().open("setup/asoft-setup.json")) {
-            return new JSONObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            return new JSONObject(new String(Io.readAll(in), StandardCharsets.UTF_8));
         } catch (JSONException e) {
             throw new IOException("bad asoft-setup.json: " + e.getMessage());
         }

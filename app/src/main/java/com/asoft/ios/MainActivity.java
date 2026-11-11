@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
     private final Panel p26 = new Panel(Guest.IOS26), p16 = new Panel(Guest.IOS16), pWatch = new Panel(Guest.WATCH);
     private TextView powerWarn, freeRamValue, wadbValue, updateValue, footer, engineLog;
     private LinearLayout updateBar, advanced;
-    private TextView updateText;
+    private TextView updateText, updateNote, updateGet, updateDismiss;
     /**
      * The clock check again every 10 s while this screen shows: at onResume the phone has just
      * lifted its CPU cap for the app's launch (A71: 2.21 GHz then, 1.56 a few seconds later).
@@ -430,29 +430,39 @@ public class MainActivity extends Activity {
         super.onPause();
     }
 
-    /** The notice that a newer release is out, hidden until the check says so. */
+    /**
+     * The notice that a newer release is out, hidden until the check says so: the version line with
+     * its two links, and under it the text the release notes may carry for the app.
+     */
     private void addUpdateBar() {
         updateBar = new LinearLayout(this);
-        updateBar.setOrientation(LinearLayout.HORIZONTAL);
-        updateBar.setGravity(Gravity.CENTER_VERTICAL);
-        updateBar.setPadding(dp(16), dp(6), dp(6), dp(6));
-        updateBar.setBackground(round(0xff0f2136, 18));
-        updateText = text(updateBar, "", 14, 0xff8cc4ff);
+        updateBar.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout line = new LinearLayout(this);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setPadding(dp(16), dp(6), dp(6), dp(6));
+        updateText = text(line, "", 14, 0xff8cc4ff);
         updateText.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        updateBar.addView(link("Get it", 0xff8cc4ff, v -> {
+        updateGet = link("Get it", 0xff8cc4ff, v -> {
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(UpdateCheck.RELEASE_PAGE)));
             } catch (android.content.ActivityNotFoundException e) {
                 Toast.makeText(this, UpdateCheck.RELEASE_PAGE, Toast.LENGTH_LONG).show();
             }
-        }));
-        updateBar.addView(link("Dismiss", 0xff5f84ad, v -> {
-            String tag = UpdateCheck.toShow(this);
-            if (tag != null) {
-                UpdateCheck.dismiss(this, tag);
+        });
+        line.addView(updateGet);
+        updateDismiss = link("Dismiss", 0xff5f84ad, v -> {
+            UpdateCheck.Notice n = UpdateCheck.toShow(this);
+            if (n != null) {
+                UpdateCheck.dismiss(this, n.tag);
             }
             showUpdate();
-        }));
+        });
+        line.addView(updateDismiss);
+        updateBar.addView(line);
+        // full width under the line, not squeezed beside the links: it can run to a few lines
+        updateNote = text(updateBar, "", 13.5f, 0xffd1d1d6);
+        updateNote.setPadding(dp(16), 0, dp(16), dp(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.bottomMargin = dp(12);
         box.addView(updateBar, lp);
@@ -460,10 +470,28 @@ public class MainActivity extends Activity {
     }
 
     private void showUpdate() {
-        String tag = UpdateCheck.toShow(this);
-        updateBar.setVisibility(tag == null ? View.GONE : View.VISIBLE);
-        if (tag != null) {
-            updateText.setText(tag + " is out (this is " + UpdateCheck.version(this) + ")");
+        UpdateCheck.Notice n = UpdateCheck.toShow(this);
+        updateBar.setVisibility(n == null ? View.GONE : View.VISIBLE);
+        if (n != null) {
+            // background, accent, the dimmer Dismiss: the blue it always had, the power warning's
+            // amber, or red for a release that fixes something that hurts
+            int bg = 0xff0f2136, accent = 0xff8cc4ff, dim = 0xff5f84ad;
+            if (n.level == UpdateCheck.CRITICAL) {
+                bg = 0xff2a0f0e;
+                accent = RED;
+                dim = 0xffb0524c;
+            } else if (n.level == UpdateCheck.IMPORTANT) {
+                bg = 0xff241b0b;
+                accent = ORANGE;
+                dim = 0xffa87a32;
+            }
+            updateBar.setBackground(round(bg, 18));
+            updateText.setTextColor(accent);
+            updateGet.setTextColor(accent);
+            updateDismiss.setTextColor(dim);
+            updateText.setText(n.tag + " is out (this is " + UpdateCheck.version(this) + ")");
+            updateNote.setText(n.text == null ? "" : n.text);
+            updateNote.setVisibility(n.text == null ? View.GONE : View.VISIBLE);
         }
         updateValue.setText(UpdateCheck.enabled(this) ? "On" : "Off");
     }

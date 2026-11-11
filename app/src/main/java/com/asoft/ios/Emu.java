@@ -106,7 +106,7 @@ final class Emu {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         baseEnv(c, linkLibraries(c), pb.environment());
         Process p = pb.start();
-        String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        String out = new String(Io.readAll(p.getInputStream()), java.nio.charset.StandardCharsets.UTF_8);
         try {
             int code = p.waitFor();
             return new String[] { String.valueOf(code), out };

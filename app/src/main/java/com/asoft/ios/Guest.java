@@ -1428,6 +1428,28 @@ final class Guest {
         return why;
     }
 
+    /** The last iOS 26 or watchOS QEMU started in the GPU's compatibility mode (start26, GpuCheck.noSparse). */
+    static volatile boolean compat26;
+    /** ...and it was one of the setup's own boots, whose failures the setup reports itself. */
+    private static volatile boolean compatSetupRun;
+    /** The QEMU whose end in that mode the screen has told of (once per QEMU). */
+    private static int compatToldPid = -1;
+
+    /**
+     * True once per QEMU: the iOS 26 or watchOS that ran in the compatibility mode ended by itself. The app's own
+     * ends (Save and close, Turn off, stop) let go of the pid (forget, stop), and a save or a Turn off in progress
+     * has its own state; a QEMU that died while it loaded a save ("resuming") is the start's own failure, which
+     * GuestService answers with a boot.
+     */
+    static synchronized boolean endedInCompatMode() {
+        if (!compat26 || compatSetupRun || !ios26Running() || pid <= 0 || pid == compatToldPid || Render.alive(pid)
+                || !("running".equals(state) || "booting".equals(state))) {
+            return false;
+        }
+        compatToldPid = pid;
+        return true;
+    }
+
     /** The saved state this QEMU started from, null after a boot. */
     static volatile String loadedTag;
 
@@ -1930,10 +1952,23 @@ final class Guest {
         }
         env.put("ASOFT_EL_SAMPLER", "30");
         env.put("ASOFT_LEDS_FILE", ledsFile(c).getPath());
+        // A GPU check passed in the compatibility mode (GpuCheck.noSparse: Turnip's sparse binds from host memory
+        // read back zeros, Adreno 750): reims' older views, which import the guest's RAM by pointer and bind
+        // nothing sparse from it. The setup's own boots too: they draw through the same reims
+        boolean noSparse = GpuCheck.noSparse(c);
+        if (noSparse) {
+            env.put("REIMS_VGPU_DEFERRED_VIEWS", "0");
+        }
         for (Map.Entry<String, String> e : ov.entrySet()) {
             if (e.getKey().startsWith("env.")) {
                 env.put(e.getKey().substring(4), e.getValue());
             }
+        }
+        // (an ios26.txt env.REIMS_VGPU_DEFERRED_VIEWS=1 of a test turns it back on: then it is no compatibility mode)
+        compat26 = noSparse && "0".equals(env.get("REIMS_VGPU_DEFERRED_VIEWS"));
+        compatSetupRun = sb != null;
+        if (compat26) {
+            AppLog.note(c, "gpu: compatibility mode (no sparse binds from host memory)");
         }
         try (PrintWriter w = new PrintWriter(new FileWriter(new File(run, "cmdline.txt")))) {
             w.println(String.join(" ", cmd));

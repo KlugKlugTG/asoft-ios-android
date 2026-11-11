@@ -733,7 +733,7 @@ final class Unpack {
                 }
             }
             try (InputStream in = new java.util.zip.GZIPInputStream(new java.io.FileInputStream(db))) {
-                org.json.JSONObject j = new org.json.JSONObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                org.json.JSONObject j = new org.json.JSONObject(new String(Io.readAll(in), StandardCharsets.UTF_8));
                 for (java.util.Iterator<String> it = j.keys(); it.hasNext(); ) {
                     String k = it.next();
                     if (k.equalsIgnoreCase(name)) {

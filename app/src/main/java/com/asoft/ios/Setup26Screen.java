@@ -259,7 +259,17 @@ final class Setup26Screen {
         }
         if (r.pass && GpuCheck.passed(a)) {
             String warn = GpuCheck.ramWarning(a);
-            gpu.setText("✓ " + r.summary + (warn.isEmpty() ? "" : "\n\n" + warn) + (r.slow.isEmpty() ? "" : "\n\n" + r.slow));
+            String head = "✓ " + r.summary;
+            // a pass in the compatibility mode (GpuCheck.noSparse): said in amber right under the green line
+            String compat = r.nosparse ? "\nThis GPU's driver cannot do sparse binds from host memory, so iOS 26 and watchOS run in"
+                    + " a compatibility mode that can stop after long use. The app saves before that when it can." : "";
+            android.text.SpannableString t = new android.text.SpannableString(head + compat
+                    + (warn.isEmpty() ? "" : "\n\n" + warn) + (r.slow.isEmpty() ? "" : "\n\n" + r.slow));
+            if (!compat.isEmpty()) {
+                t.setSpan(new android.text.style.ForegroundColorSpan(ORANGE), head.length(), head.length() + compat.length(),
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            gpu.setText(t);
             gpu.setTextColor(warn.isEmpty() ? GREEN : ORANGE);
             return;
         }

@@ -102,7 +102,7 @@ final class CdnEdges {
             c.setReadTimeout(8_000);
             c.setRequestProperty("accept", "application/dns-json");
             try (InputStream in = c.getInputStream()) {
-                String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                String body = new String(Io.readAll(in), StandardCharsets.UTF_8);
                 Matcher m = A.matcher(body);
                 while (m.find()) {
                     seen.putIfAbsent(m.group(1), new Edge(InetAddress.getByName(m.group(1)), from));

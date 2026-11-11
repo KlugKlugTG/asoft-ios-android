@@ -69,7 +69,7 @@ final class Screen26 {
 
     private static String asset(Context c, String name) throws IOException {
         try (InputStream s = c.getAssets().open(name)) {
-            return new String(s.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
+            return new String(Io.readAll(s), StandardCharsets.UTF_8).replace("\r\n", "\n");
         } catch (java.io.FileNotFoundException e) {
             throw new IOException("this build has no " + name + " (pull-setup.sh)");
         }

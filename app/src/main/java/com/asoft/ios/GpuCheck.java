@@ -20,6 +20,12 @@ import java.util.Locale;
  * the app and its Turnip. When Turnip fails, or the phone has no Adreno (Turnip drives Adreno GPUs only),
  * the phone's own Vulkan driver is probed too, for the log: what it lacks is what support for it
  * (Mali, say) would need. iOS 16 does not use the GPU and is not gated.
+ * <p>
+ * A Turnip that lacks only sparse binds from host memory (Adreno 750, 2026-11: the binds are accepted but read
+ * back zeros) passes in a compatibility mode ({@link #FALLBACK_COVERS}, {@link #noSparse}): iOS 26 and watchOS
+ * then start with reims' deferred views off (REIMS_VGPU_DEFERRED_VIEWS=0, Guest.start26), the older path that
+ * imports the guest's RAM by pointer and binds nothing sparse from it. Its cost: a mapping per view, so a long
+ * run can reach Android's 65,530 and QEMU ends (AutoSave saves before that when it can).
  */
 final class GpuCheck {
     private GpuCheck() {}
@@ -54,14 +60,47 @@ final class GpuCheck {
                 && new File(c.getFilesDir(), "gpucheck-no-turnip").exists();
     }
 
+    /**
+     * Debug builds: Turnip's sparse binds from host memory counted as missing even when the probe passed them, to
+     * see the compatibility mode on a phone that has them (adb: run-as PACKAGE touch files/gpucheck-no-sparse, then
+     * Check again; rm it and check again to go back).
+     */
+    static boolean sparseOff(Context c) {
+        return (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && new File(c.getFilesDir(), "gpucheck-no-sparse").exists();
+    }
+
+    /** The lack the sparse tests report (gpucheck.c: lack() after "test: sparse gather"). */
+    static final String SPARSE_HOST = "sparse binds from host memory";
+
+    /**
+     * The lacks the compatibility mode runs without, the one place that says so: with reims' deferred views off
+     * (REIMS_VGPU_DEFERRED_VIEWS=0) metal2vulkan gathers nothing on the GPU and makes no sparse heap images (both
+     * exist only over gathered pages), so sparse binds from host memory are not used. A Turnip whose lacks are all
+     * in here, and that ran every test (device, compute, render, host memory), passes with {@link Result#nosparse}.
+     * Anything else stays a fail.
+     */
+    static final List<String> FALLBACK_COVERS = java.util.Collections.singletonList(SPARSE_HOST);
+
     /** The check passed for this build: iOS 26 and watchOS may be downloaded. */
     static boolean passed(Context c) {
         return !turnipOff(c) && key(c).equals(c.getSharedPreferences("setup", Context.MODE_PRIVATE).getString("gpucheck-pass", ""));
     }
 
+    /**
+     * The pass for this build is a compatibility-mode one: iOS 26 and watchOS start without sparse binds from host
+     * memory (Guest.start26 puts REIMS_VGPU_DEFERRED_VIEWS=0 in QEMU's environment). Keyed like the pass, so a new
+     * build checks again.
+     */
+    static boolean noSparse(Context c) {
+        return passed(c) && key(c).equals(c.getSharedPreferences("setup", Context.MODE_PRIVATE).getString("gpucheck-nosparse", ""));
+    }
+
     /** The last check's outcome, for the screen. */
     static final class Result {
         boolean pass;
+        /** A pass in the compatibility mode: Turnip lacks only what {@link #FALLBACK_COVERS} lists. */
+        boolean nosparse;
         boolean ran;
         String summary = "";            // one line for people
         final List<String> missing = new ArrayList<>();
@@ -109,6 +148,17 @@ final class GpuCheck {
             return "sparse memory binding (copies could replace it)";
         }
         return null;
+    }
+
+    /**
+     * A failed Turnip log that the compatibility mode covers: the probe ended by itself (its "missing:" line, not a
+     * crash or a timeout), ran every test up to the sparse one (gpucheck.c runs them in this order and a sparse
+     * test only after the host-memory one), and every lack it wrote is in {@link #FALLBACK_COVERS}. A failed
+     * compute, render or host-memory test writes a lack of its own, so it keeps the fail.
+     */
+    private static boolean fallbackPass(List<String> lacks, List<String> tests, boolean probeEnded) {
+        return probeEnded && !lacks.isEmpty() && FALLBACK_COVERS.containsAll(lacks)
+                && tests.containsAll(java.util.Arrays.asList("compute", "render", "host memory", "sparse gather"));
     }
 
     /** A lack that rules this phone out with its current driver, in plain words, or null. */
@@ -217,17 +267,49 @@ final class GpuCheck {
             } else {
                 turnipEnd = once(c, "turnip");
                 pass = "pass".equals(turnipEnd);
+                if (pass && sparseOff(c)) {
+                    pass = !dropSparse(new File(d, "turnip.log"));
+                    if (!pass) {
+                        turnipEnd = "pass, sparse binds counted as missing (debug flag files/gpucheck-no-sparse)";
+                    }
+                }
             }
             if (!pass) {
                 once(c, "system");
             }
             Result r = last(c);
-            c.getSharedPreferences("setup", Context.MODE_PRIVATE).edit().putString("gpucheck-pass", r.pass ? key(c) : "").apply();
-            AppLog.note(c, "gpu check: " + (r.pass ? "pass" : (r.never ? "will not run here: " : "not supported yet: ") + String.join("; ", r.why))
+            c.getSharedPreferences("setup", Context.MODE_PRIVATE).edit().putString("gpucheck-pass", r.pass ? key(c) : "")
+                    .putString("gpucheck-nosparse", r.nosparse ? key(c) : "").apply();
+            AppLog.note(c, "gpu check: " + (r.nosparse ? "pass in the compatibility mode (no " + SPARSE_HOST + ")"
+                    : r.pass ? "pass" : (r.never ? "will not run here: " : "not supported yet: ") + String.join("; ", r.why))
                     + " (turnip " + turnipEnd + ")");
             return r;
         } finally {
             running = false;
+        }
+    }
+
+    /**
+     * The debug flag files/gpucheck-no-sparse on a Turnip log that passed: its end rewritten as the probe writes
+     * a sparse failure (gpucheck.c: lacks, missing, result: fail), with a line that says it was the flag, so that
+     * last() sorts it as it sorts an Adreno 750's. True when rewritten (the log had its sparse test and a pass).
+     */
+    private static boolean dropSparse(File log) {
+        try {
+            List<String> lines = new ArrayList<>(Files.readAllLines(log.toPath(), StandardCharsets.UTF_8));
+            int end = lines.lastIndexOf("result: pass");
+            if (end < 0 || !lines.contains("test: sparse gather")) {
+                return false;
+            }
+            lines.subList(end, lines.size()).clear();
+            lines.add("note: " + SPARSE_HOST + " counted as missing (debug flag files/gpucheck-no-sparse)");
+            lines.add("lacks: " + SPARSE_HOST);
+            lines.add("missing: " + SPARSE_HOST);
+            lines.add("result: fail");
+            Files.write(log.toPath(), lines, StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 
@@ -315,7 +397,7 @@ final class GpuCheck {
     private static String prop(String name) {
         try {
             Process p = new ProcessBuilder("getprop", name).redirectErrorStream(true).start();
-            String v = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String v = new String(Io.readAll(p.getInputStream()), StandardCharsets.UTF_8).trim();
             p.waitFor();
             return v;
         } catch (IOException | InterruptedException e) {
@@ -350,6 +432,9 @@ final class GpuCheck {
         rep.append("date: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT).format(new java.util.Date())).append('\n');
         String gpu = "", driver = "";
         List<String> sysLines = new ArrayList<>();
+        // Turnip's own lacks and tests, for the compatibility mode (fallbackPass)
+        List<String> lacks = new ArrayList<>(), tests = new ArrayList<>();
+        boolean probeEnded = false;
         for (String which : new String[] {"turnip", "system"}) {
             File log = new File(d, which + ".log");
             if (!log.isFile()) {
@@ -371,6 +456,11 @@ final class GpuCheck {
                         r.pass = l.endsWith("pass");
                     } else if (l.startsWith("lacks: ")) {
                         r.missing.add(l.substring(7));
+                        lacks.add(l.substring(7));
+                    } else if (l.startsWith("missing: ")) {
+                        probeEnded = true;      // the probe's own end (gpucheck.c), not a crash or a timeout
+                    } else if (l.startsWith("test: ")) {
+                        tests.add(l.substring(6));
                     } else if (l.startsWith("gpu: ")) {
                         gpu = l.substring(5);
                     } else if (l.startsWith("driver: ")) {
@@ -383,12 +473,18 @@ final class GpuCheck {
                 rep.append("(cannot read: ").append(e.getMessage()).append(")\n");
             }
         }
+        if (r.ran && !r.pass && adreno() && !turnipOff(c) && fallbackPass(lacks, tests, probeEnded)) {
+            r.pass = true;
+            r.nosparse = true;
+        }
         if (r.ran) {
             judge(c, r, sysLines, adreno() && !turnipOff(c));
             rep.append("\n== verdict\n");
             rep.append(String.format(Locale.ROOT, "ram: %.2f GB (a warning below %.1f for iOS 26, %.1f for watchOS; guest memory iOS 26 %d MiB, watchOS %d MiB)%n",
                     r.ram / 1e9, RAM_IOS26 / 1e9, RAM_WATCH / 1e9, Guest.ramMiB(c, Guest.IOS26), Guest.ramMiB(c, Guest.WATCH)));
-            rep.append("result: ").append(r.pass ? "supported" : r.never ? "will not run on this phone (with its current driver)" : "not supported yet")
+            rep.append("result: ").append(r.nosparse ? "supported in the compatibility mode (no " + SPARSE_HOST
+                    + ": reims' deferred views off, REIMS_VGPU_DEFERRED_VIEWS=0)"
+                    : r.pass ? "supported" : r.never ? "will not run on this phone (with its current driver)" : "not supported yet")
                     .append('\n');
             for (String w : r.why) {
                 rep.append("needs: ").append(w).append('\n');

@@ -22,7 +22,8 @@ final class HintBoost {
     static final long TARGET_NS = 16_666_666L;
 
     static void start(Context c, int pid) {
-        if (!"1".equals(Guest.overrides26().get("adpf"))) {
+        // PerformanceHintManager is Android 12's (API 31): older phones go without the hint
+        if (android.os.Build.VERSION.SDK_INT < 31 || !"1".equals(Guest.overrides26().get("adpf"))) {
             return;
         }
         Thread t = new Thread(() -> run(c.getApplicationContext(), pid), "adpf");
@@ -75,6 +76,7 @@ final class HintBoost {
         return r;
     }
 
+    @android.annotation.TargetApi(31)      // start() runs it on Android 12 and later only
     private static void run(Context c, int pid) {
         try {
             Thread.sleep(30_000);       // the stubs exist once EL0 runs natively (ASOFT_NATIVE_EL0_DELAY_MS)
@@ -114,7 +116,8 @@ final class HintBoost {
                 } else {
                     s.reportActualWorkDuration(2 * TARGET_NS);
                 }
-                if (++rounds % 600 == 0) {      // threads come and go (stubs, Turnip): every ~10 s
+                // threads come and go (stubs, Turnip): every ~10 s; setThreads is Android 14's (API 34)
+                if (++rounds % 600 == 0 && android.os.Build.VERSION.SDK_INT >= 34) {
                     s.setThreads(threads(pid));
                 }
                 Thread.sleep(16);

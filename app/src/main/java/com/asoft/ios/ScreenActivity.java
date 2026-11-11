@@ -116,7 +116,9 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
-        getWindow().setDecorFitsSystemWindows(false);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+        }       // Android 10: immersive()'s layout flags do the same
         view = new SurfaceView(this);
         view.getHolder().addCallback(this);
         watchMode = Guest.os(this) == Guest.WATCH;
@@ -675,6 +677,32 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                 .show();
     }
 
+    /** Where the compatibility mode's stops are collected (asoft-ios-android). */
+    static final String COMPAT_ISSUE = "https://github.com/alpersamur3/asoft-ios-android/issues/1";
+
+    /**
+     * iOS 26 or watchOS ended by itself in the GPU's compatibility mode (GpuCheck.noSparse: no sparse binds from
+     * host memory, so reims' views take a mapping each and a long run can reach Android's limit): once per stop
+     * (Guest.endedInCompatMode), where to tell us about it.
+     */
+    private void compatNotice(String name) {
+        AppLog.note(this, "gpu: " + name + " stopped in the compatibility mode: notice shown");
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(name + " stopped")
+                .setMessage("This is a known issue on this GPU (Adreno 750 and others without sparse binds from host memory)."
+                        + " If you want to help fix it, write on Reddit (r/hackios) or open an issue on GitHub.")
+                .setPositiveButton("Open the GitHub issue", (d, w) -> {
+                    try {
+                        startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(COMPAT_ISSUE)));
+                    } catch (android.content.ActivityNotFoundException e) {
+                        toast(COMPAT_ISSUE);
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
     /** Quick boot: keep iOS as it is, close; the next start goes on from here. */
     private void saveAndClose() {
         if (!Guest.running()) {
@@ -830,7 +858,17 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
         }
     }
 
+    @SuppressWarnings("deprecation")
     private void immersive() {
+        if (android.os.Build.VERSION.SDK_INT < 30) {
+            // Android 10 has no WindowInsetsController: the flags it replaced, for the same full screen with
+            // bars that come back on a swipe
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            return;
+        }
         WindowInsetsController c = getWindow().getInsetsController();
         if (c != null) {
             c.hide(WindowInsets.Type.systemBars());
@@ -949,6 +987,9 @@ public class ScreenActivity extends Activity implements SurfaceHolder.Callback, 
                 String why = Guest.stopReason(this);
                 status.setText(name + " stopped" + (why.isEmpty() ? "" : ": " + why));
                 restart.setVisibility(View.VISIBLE);
+                if (Guest.endedInCompatMode()) {
+                    compatNotice(name);
+                }
                 if (fbPid != -1) {
                     render.post(Render::clear);     // not the stopped guest's last frame
                 }
