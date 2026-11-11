@@ -68,7 +68,17 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets
           cp /tmp/official-x/lib/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/
+          # unneeded or built here: render/gpucheck/unpack come from cpp/CMakeLists.txt and
+          # libconscrypt_jni from the conscrypt dependency — copies would be duplicate APK paths
+          rm -f app/src/main/jniLibs/arm64-v8a/librender.so \
+                app/src/main/jniLibs/arm64-v8a/libgpucheck.so \
+                app/src/main/jniLibs/arm64-v8a/libunpack.so \
+                app/src/main/jniLibs/arm64-v8a/libconscrypt_jni.so
           cp -r /tmp/official-x/assets/. app/src/main/assets/
+          test -f app/src/main/jniLibs/arm64-v8a/libqemu.so
+          test -f app/src/main/jniLibs/arm64-v8a/libqemu26.so
+          test -f app/src/main/jniLibs/arm64-v8a/lib_libvulkan_freedreno.so.so
+          test -f app/src/main/jniLibs/arm64-v8a/lib_libvulkan.so.so
           echo "libraries: $(ls app/src/main/jniLibs/arm64-v8a | wc -l), assets: $(find app/src/main/assets -type f | wc -l)"
       - name: The fork's own setup scripts over the harvested ones
         run: |
