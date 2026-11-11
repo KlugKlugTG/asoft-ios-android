@@ -254,7 +254,7 @@ final class GpuCheck {
                 seenPid = true;
                 try {
                     String p = new String(Files.readAllBytes(pid.toPath()), StandardCharsets.US_ASCII).trim();
-                    if (!p.isEmpty() && !new File("/proc/" + p).exists()) {
+                    if (!p.isEmpty() && !alive(Integer.parseInt(p))) {
                         // gone without a result: the driver crashed the probe (its last line says where)
                         appendLine(log, "error: the probe's process ended without a result (the driver crashed it)");
                         appendLine(log, "result: fail");
@@ -274,6 +274,20 @@ final class GpuCheck {
         appendLine(log, "error: no result in 90 s" + (seenPid ? " (the driver hangs)" : " (the probe did not start)"));
         appendLine(log, "result: fail");
         return "timeout";
+    }
+
+    /**
+     * Whether the probe's process is still there. Not by /proc/PID: Android hides the /proc entry of a
+     * non-debuggable app's other process (not dumpable, so hidepid hides it even from its own uid), so a
+     * release build saw a running probe as gone. kill(pid, 0) asks the kernel by uid instead.
+     */
+    private static boolean alive(int pid) {
+        try {
+            android.system.Os.kill(pid, 0);
+            return true;
+        } catch (android.system.ErrnoException e) {
+            return e.errno != android.system.OsConstants.ESRCH;
+        }
     }
 
     private static void appendLine(File f, String s) {

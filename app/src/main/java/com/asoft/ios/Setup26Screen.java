@@ -425,7 +425,8 @@ final class Setup26Screen {
         boolean started = PhoneSetup26.work(a).isDirectory() && !(i26done || wdone) || PhoneSetup26.work(a).isDirectory()
                 && (PhoneSetup26.wants(a, PhoneSetup26.IOS26) && !i26done || PhoneSetup26.wants(a, PhoneSetup26.WATCH) && !wdone);
         go.setText(!pass ? "Check the GPU" : running ? (s.paused ? "Resume" : "Pause") : started ? "Resume install" : "Install");
-        go.setVisibility(!pass && gpuResult != null && gpuResult.ran ? View.GONE
+        // a failed check has its own Check again; a pass from another build of the app (an update) needs this button
+        go.setVisibility(!pass && gpuResult != null && gpuResult.ran && !gpuResult.pass ? View.GONE
                 : running && !s.paused && !SetupService.pausable(s.step) ? View.GONE : View.VISIBLE);
         go.setEnabled(!GpuCheck.running);
         cancel.setVisibility(pass && (running || started) ? View.VISIBLE : View.GONE);
