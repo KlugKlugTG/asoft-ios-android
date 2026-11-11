@@ -214,5 +214,13 @@ Where a phone install's hours go (measured on an S25 Ultra, 2026-11-08/09): iOS 
 - The build steps' scripts run on older app releases as they are: only the app-side changes
   (vCPUs, cache, clusters, connections) are in the APK.
 
-`ci.yml` (GitHub Actions) builds the debug APK and bash-checks every `*.sh`, so the speedup
-patches are verified on every push.
+`ci.yml` (GitHub Actions) does two things on every push: it `bash -n`-checks every `*.sh`, and it
+builds a **signed release APK** of this fork — the native libraries and the setup assets are taken
+from the author's own release APK (they are not in this repository), the fork's Java and the patched
+`ios26/scripts` are built around them, and the APK is signed with a key the workflow makes. Install
+it after uninstalling the installed app: it is signed with a different key.
+
+What that APK does not carry yet: the iOS 16 disk job's parallel copy (`tools/mkiosroot.sh`) lives
+inside the helper VM's initramfs (`installer/helper/out/initrd.gz`), which is built on a PC and is
+not in either repository — that one needs the author to rebuild the helper. The iOS 26 rootfs
+patches (`ios26/scripts/mk-root26.sh`, `m2-finish.sh`) are text assets and do land in the APK.
