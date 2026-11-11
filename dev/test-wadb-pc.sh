@@ -7,7 +7,7 @@
 #   4. the app's pairing against that stand-in, and its connection and shell against a stand-in for adbd
 # Needs Android Studio's Java (gradle.properties), adb and openssl. Conscrypt's desktop jar is downloaded once into
 # build/wadb-pc. "adb pair" notes the stand-in's id in ~/.android/adb_known_hosts.pb: the file is put back after.
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 export MSYS_NO_PATHCONV=1
 JB="$(cygpath -u "$(sed -n 's/^org.gradle.java.home=//p' gradle.properties | sed 's/\\\\/\\/g')")/bin"
 W=build/wadb-pc
@@ -17,7 +17,7 @@ mkdir -p $W/classes
 [ -s $JAR ] || curl -sSL --max-time 300 -o $JAR https://repo1.maven.org/maven2/org/conscrypt/conscrypt-openjdk-uber/$V/conscrypt-openjdk-uber-$V.jar || exit 1
 S=app/src/main/java/com/asoft/ios
 "$JB/javac" -nowarn -d $W/classes -cp $JAR $S/AdbKey.java $S/Spake2.java $S/AdbPairing.java $S/AdbTls.java $S/AdbConnection.java \
-    tools/wadb/PairTest.java || exit 1
+    dev/tools/wadb/PairTest.java || exit 1
 run() { "$JB/java" -cp "$W/classes;$JAR" com.asoft.ios.PairTest "$@" | tr -d '\r'; }
 fail=0
 say() { if [ "$1" = 0 ]; then echo "OK      $2"; else echo "FAILED  $2"; fail=1; fi; }

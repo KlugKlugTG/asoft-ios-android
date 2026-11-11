@@ -7,7 +7,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 export MSYS_NO_PATHCONV=1
 until grep -q -E "^exit [0-9]+$" "$ROOT/ios26-settle/run.log" 2>/dev/null; do sleep 20; done
 echo "$(date +%T) settle test ended"
-adb install -r "$(cygpath -w "$HERE/app/build/outputs/apk/debug/app-debug.apk")" 2>&1 | tail -n 1
+adb install -r "$(cygpath -w "$HERE/../app/build/outputs/apk/debug/app-debug.apk")" 2>&1 | tail -n 1
 sleep 10
 adb shell "am start --activity-clear-top -n com.asoft.ios.dev/com.asoft.ios.MainActivity" >/dev/null
 sleep 5

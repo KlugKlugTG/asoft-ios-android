@@ -10,3 +10,4 @@ app/src/main/jniLibs26/
 app/src/main/assets/helper/
 app/src/main/assets/xnu/
 app/src/main/assets/setup/
+__pycache__/

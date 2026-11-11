@@ -161,7 +161,7 @@ texture each display frame; input goes over QMP.
   `app/src/main/assets`.
 - The app: `./gradlew assembleDebug` (Android Studio's JDK, SDK 36, NDK 29). A release build is
   signed when `~/.android/asoft-ios-release.properties` (or `$ASOFT_SIGNING`) names a key.
-- Tests on a phone over adb: `test-*.sh` (input goes to the phone only while the app is on top
+- Tests and measurements on a phone over adb: `dev/` (`dev/test-*.sh`; input goes to the phone only while the app is on top
   and the phone is unlocked).
 
 ## Licenses

@@ -7,8 +7,8 @@ set -u
 OS=$1 OUT=$2 PKG=${3:-com.asoft.ios.dev}
 export ANDROID_SERIAL=${ANDROID_SERIAL:-R5GYB4V4PKL} MSYS_NO_PATHCONV=1 OUT
 cd "$(dirname "$0")"
-. ./guarded.sh
-. tools/bar-xy.sh
+. "$(dirname "$0")/guarded.sh"
+. "$(dirname "$0")/tools/bar-xy.sh"
 P=${PKG//./[.]}
 LOG=files/run/app.txt
 applog() { adb shell "run-as $PKG cat $LOG" | tr -d '\r'; }
