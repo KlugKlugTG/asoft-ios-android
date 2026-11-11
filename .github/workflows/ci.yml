@@ -62,15 +62,21 @@ jobs:
           cp /tmp/official-x/lib/arm64-v8a/*.so app/src/main/jniLibs/arm64-v8a/
           cp -r /tmp/official-x/assets/. app/src/main/assets/
           echo "libraries: $(ls app/src/main/jniLibs/arm64-v8a | wc -l), assets: $(find app/src/main/assets -type f | wc -l)"
-      - name: The fork's patched setup scripts over the harvested ones
+      - name: The fork's own setup scripts over the harvested ones
         run: |
           set -e
+          # the phone's jobs and prelude (this repository): the 8-vCPU device trees are built by the
+          # patched shared-build.sh
+          mkdir -p app/src/main/assets/setup/phone/jobs
+          cp setup/phone/*.sh setup/phone/*.py app/src/main/assets/setup/phone/
+          cp setup/phone/jobs/*.sh app/src/main/assets/setup/phone/jobs/
+          grep -c 'dtree-root26smp.py fw/dtree.orig dtree-smp8' app/src/main/assets/setup/phone/jobs/shared-build.sh
+          # the companion fork's patched iOS 26 build steps (plain text assets)
           git clone --depth 1 https://github.com/KlugKlugTG/asoft-ios /tmp/asoft-ios
           for f in mk-root26.sh m2-finish.sh; do
             cp "/tmp/asoft-ios/ios26/scripts/$f" "app/src/main/assets/setup/scripts/ios26/$f"
           done
           sha256sum app/src/main/assets/setup/scripts/ios26/mk-root26.sh
-          grep -c 'copy "$(src' app/src/main/assets/setup/scripts/ios26/mk-root26.sh
       - name: A release key for this build
         run: |
           set -e
